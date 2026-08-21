@@ -15,5 +15,10 @@ cd ../frontend
 npm ci
 npm run build
 
+# KABU (株収支アプリ) のフロント
+cd ../kabu
+npm ci
+npm run build
+
 sudo systemctl restart kakei-gunicorn
 echo "デプロイ完了"

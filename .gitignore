@@ -15,6 +15,7 @@ staticfiles/
 # Node
 node_modules/
 frontend/dist/
+kabu/dist/
 
 # IDE / OS
 .vscode/

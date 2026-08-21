@@ -17,6 +17,17 @@ Vue 3 + Django REST Framework の家計管理 Web アプリ。スマホブラウ
 - 固定費に支払方法を紐付け可能(カード払いのインターネット等)。※カード払い固定費は「支払済にする」だけで記録すればカード別合計に入る。同じ月のカード請求を親子方式でも入力する場合は、二重計上を避けるため内訳・親金額にその固定費分を含めないこと
 - マルチユーザー (会員登録制、共有した記録以外はユーザーごとに完全分離)
 
+## KABU — 株収支アプリ (同居)
+
+同じリポジトリ・同じバックエンドで動く株式収支の記録アプリ。`kabu/` に独立した Vue アプリとして置き、URL は `/kabu/` で公開する (開発: http://localhost:5175/kabu/)。**アカウントは KAKEI と共通** (認証・API は KAKEI バックエンドの `/kakei/api` を共用するため、nginx にプロキシ追加は不要)。
+
+- **取引記録**: 買付/売却、銘柄コード・銘柄名、株数・単価・手数料、口座区分 (特定/NISA成長/NISAつみたて/一般)、証券会社、メモ。銘柄コード入力で過去取引から銘柄名等を自動補完
+- **実現損益の自動計算**: 移動平均法 (買付手数料込み)。売却行に損益を表示し、(銘柄コード, 口座区分) ごとに平均取得単価を管理
+- **保有一覧**: 保有株数・平均取得単価・取得額。現在値を手動入力すると評価額・評価損益を表示
+- **配当金記録**: 受取日・銘柄・税引後受取額
+- **年間ダッシュボード**: 実現損益+配当の年間トータル、月別推移 (積み上げ棒グラフ)、銘柄別内訳。年送りで過去年も参照可
+- データはユーザーごとに分離 (KAKEI のグループ共有とは無関係)
+
 ## 技術スタック
 
 | 層 | 技術 |
@@ -40,6 +51,7 @@ docker compose exec backend python manage.py createsuperuser
 ```
 
 - アプリ: http://localhost:5174/kakei/ (Vite。`/kakei/api` は backend コンテナへプロキシ)
+- KABU: http://localhost:5175/kabu/ (API は同じ backend へプロキシ)
 - API 直接 / DRF browsable API: http://localhost:8000/api/
 - 管理画面: http://localhost:8000/admin/
 
@@ -58,6 +70,8 @@ docker compose exec backend python manage.py test
 docker compose build backend
 # frontend/package.json 変更時 (ホストで npm install --package-lock-only してから)
 docker compose build frontend; docker compose up -d --force-recreate frontend
+# kabu/package.json 変更時も同様
+docker compose build kabu; docker compose up -d --force-recreate kabu
 ```
 
 ## 本番デプロイ (カゴヤ VPS / AlmaLinux)
@@ -102,8 +116,11 @@ sudo -u kakei .venv/bin/python manage.py migrate --settings=config.settings.prod
 sudo -u kakei .venv/bin/python manage.py collectstatic --noinput --settings=config.settings.prod
 sudo -u kakei .venv/bin/python manage.py createsuperuser --settings=config.settings.prod
 
-# 7. フロントエンドビルド
+# 7. フロントエンドビルド (KAKEI と KABU)
 cd /opt/kakei/frontend
+sudo -u kakei npm ci
+sudo -u kakei npm run build
+cd /opt/kakei/kabu
 sudo -u kakei npm ci
 sudo -u kakei npm run build
 
@@ -115,6 +132,7 @@ sudo systemctl enable --now kakei-gunicorn
 # 9. SELinux (nginx に静的ファイルの読取とバックエンド接続を許可)
 sudo setsebool -P httpd_can_network_connect 1
 sudo semanage fcontext -a -t httpd_sys_content_t "/opt/kakei/frontend/dist(/.*)?"
+sudo semanage fcontext -a -t httpd_sys_content_t "/opt/kakei/kabu/dist(/.*)?"
 sudo semanage fcontext -a -t httpd_sys_content_t "/opt/kakei/backend/staticfiles(/.*)?"
 sudo restorecon -R /opt/kakei
 
@@ -152,6 +170,7 @@ sudo -u kakei /opt/kakei/deploy/deploy.sh
 
 ```bash
 curl -I http://v133-18-242-137.vir.kagoya.net/kakei/            # 200 (index.html)
+curl -I http://v133-18-242-137.vir.kagoya.net/kabu/             # 200 (KABU index.html)
 curl http://v133-18-242-137.vir.kagoya.net/kakei/api/auth/me/   # 401 JSON
 # スマホから会員登録 → 取引追加 → ダッシュボード表示
 # 管理画面: http://v133-18-242-137.vir.kagoya.net/kakei/admin/
@@ -173,3 +192,8 @@ curl http://v133-18-242-137.vir.kagoya.net/kakei/api/auth/me/   # 401 JSON
 | POST | `/api/group/join/` `leave/` | 招待コードで参加 / 退出 |
 | POST/DELETE | `/api/settlements/` `{id}/` | 月次精算の記録 / 取消 |
 | GET | `/api/summary/monthly/?month=YYYY-MM` | 月次サマリー + 最低必要額 + 共有精算 + 支払方法別合計 |
+| CRUD | `/api/stocks/trades/` | (KABU) 株取引 (`?year=&code=`)。売却行は `realized_pnl` 付き |
+| CRUD | `/api/stocks/dividends/` | (KABU) 配当金 (`?year=`) |
+| GET | `/api/stocks/positions/` | (KABU) 保有ポジション (移動平均) + 評価損益 |
+| PUT/DELETE | `/api/stocks/prices/{code}/` | (KABU) 銘柄の現在値を手動登録/削除 |
+| GET | `/api/stocks/summary/?year=YYYY` | (KABU) 年間サマリー (実現損益・配当・月別・銘柄別) |
