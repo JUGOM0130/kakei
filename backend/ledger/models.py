@@ -237,6 +237,8 @@ class Preference(models.Model):
     )
     # 当月のやりくりを前月の収入 (給料) で行う: ホームの収入・収支を前月収入ベースで表示
     use_prev_month_income = models.BooleanField("前月収入でやりくり", default=False)
+    # 支出合計に未払いの固定費を含めて「今月の支払合計予想」として表示する
+    forecast_expense = models.BooleanField("支払合計を予想で表示", default=False)
     updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self):

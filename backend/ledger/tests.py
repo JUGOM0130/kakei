@@ -794,6 +794,54 @@ class PreferenceTests(BaseTestCase):
         self.assertEqual(data["income_total"], 999)
 
 
+class ForecastExpenseTests(BaseTestCase):
+    def test_expense_forecast_mode(self):
+        Transaction.objects.create(
+            user=self.alice, category=self.alice_food, amount=30000, date="2026-08-05"
+        )
+        RecurringPayment.objects.create(
+            user=self.alice,
+            name="家賃",
+            amount=70000,
+            category=self.alice_housing,
+            day_of_month=27,
+        )
+        self.client.force_login(self.alice)
+
+        # デフォルト: 実支出のみ
+        data = self.client.get("/api/summary/monthly/", {"month": "2026-08"}).json()
+        self.assertEqual(data["expense_total"], 30000)
+        self.assertFalse(data["expense_forecast"]["enabled"])
+
+        # オン: 未払い固定費を上乗せした支払予想
+        self.client.put("/api/preferences/", {"forecast_expense": True}, format="json")
+        data = self.client.get("/api/summary/monthly/", {"month": "2026-08"}).json()
+        self.assertEqual(data["expense_total"], 100000)  # 30000 + 未払い70000
+        self.assertEqual(data["balance"], -100000)
+        fc = data["expense_forecast"]
+        self.assertTrue(fc["enabled"])
+        self.assertEqual(fc["actual"], 30000)
+        self.assertEqual(fc["unpaid_recurring"], 70000)
+
+        # 支払済にすると予想と実支出が一致していく
+        rp_id = data["recurring"]["items"][0]["id"]
+        self.client.post(
+            f"/api/recurring-payments/{rp_id}/pay/", {"month": "2026-08"}, format="json"
+        )
+        data = self.client.get("/api/summary/monthly/", {"month": "2026-08"}).json()
+        self.assertEqual(data["expense_total"], 100000)  # 実100000 + 未払い0
+        self.assertEqual(data["expense_forecast"]["actual"], 100000)
+        self.assertEqual(data["expense_forecast"]["unpaid_recurring"], 0)
+
+        # partial 更新: 他の設定に影響しない
+        self.client.put(
+            "/api/preferences/", {"use_prev_month_income": True}, format="json"
+        )
+        pref = self.client.get("/api/preferences/").json()
+        self.assertTrue(pref["forecast_expense"])
+        self.assertTrue(pref["use_prev_month_income"])
+
+
 class BalanceTests(BaseTestCase):
     def test_balance_forecast(self):
         self.client.force_login(self.alice)

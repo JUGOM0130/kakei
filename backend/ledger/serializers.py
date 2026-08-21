@@ -240,7 +240,7 @@ class RecurringPaymentSerializer(serializers.ModelSerializer):
 class PreferenceSerializer(serializers.ModelSerializer):
     class Meta:
         model = Preference
-        fields = ["use_prev_month_income"]
+        fields = ["use_prev_month_income", "forecast_expense"]
 
 
 class AccountBalanceSerializer(serializers.ModelSerializer):

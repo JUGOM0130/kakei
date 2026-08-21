@@ -28,6 +28,7 @@ const balanceSaved = ref(false)
 const balanceError = ref('')
 
 const usePrevIncome = ref(false)
+const forecastExpense = ref(false)
 
 const partner = computed(() => groupStore.partner)
 
@@ -44,12 +45,19 @@ onMounted(async () => {
     balanceDate.value = balanceRes.data.balance.as_of_date
   }
   usePrevIncome.value = prefRes.data.use_prev_month_income
+  forecastExpense.value = prefRes.data.forecast_expense
 })
 
 async function togglePrevIncome() {
   usePrevIncome.value = !usePrevIncome.value
   await api.put('/preferences/', { use_prev_month_income: usePrevIncome.value })
   ledger.summary = null // 次回表示時に再取得
+}
+
+async function toggleForecastExpense() {
+  forecastExpense.value = !forecastExpense.value
+  await api.put('/preferences/', { forecast_expense: forecastExpense.value })
+  ledger.summary = null
 }
 
 async function saveBalance() {
@@ -237,6 +245,22 @@ async function logout() {
           {{ usePrevIncome ? 'オン' : 'オフ' }}
         </button>
       </div>
+      <div class="pref-row pref-row-second">
+        <div>
+          <div class="pref-title">支出を「今月の支払合計予想」で表示する</div>
+          <p class="hint">
+            オンにすると、ホームの支出・収支に未払いの固定費 (残り必要額)
+            を上乗せした月末見込みを表示します。実支出との内訳も注記されます。
+          </p>
+        </div>
+        <button
+          class="chip"
+          :class="{ active: forecastExpense }"
+          @click="toggleForecastExpense"
+        >
+          {{ forecastExpense ? 'オン' : 'オフ' }}
+        </button>
+      </div>
     </div>
 
     <!-- 口座残高 -->
@@ -409,5 +433,11 @@ async function logout() {
 
 .pref-title {
   font-weight: 600;
+}
+
+.pref-row-second {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--color-border);
 }
 </style>

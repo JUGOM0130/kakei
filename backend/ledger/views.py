@@ -524,12 +524,23 @@ class MonthlySummaryView(APIView):
                 "after_required": projected - remaining_total,
             }
 
+        # 支払合計予想: 未払いの固定費を支出に上乗せして月末見込みを表示する設定
+        forecast_expense = pref.forecast_expense if pref else False
+        expense_actual = expense_total
+        if forecast_expense:
+            expense_total = expense_total + remaining_total
+
         return Response(
             {
                 "month": month,
                 "income_month": income_month,
                 "income_total": income_total,
                 "expense_total": expense_total,
+                "expense_forecast": {
+                    "enabled": forecast_expense,
+                    "actual": expense_actual,
+                    "unpaid_recurring": remaining_total,
+                },
                 "balance": income_total - expense_total,
                 "income_by_category": income_by_category,
                 "expense_by_category": expense_by_category,
@@ -752,7 +763,7 @@ class PreferenceView(APIView):
 
     def put(self, request):
         pref, _ = Preference.objects.get_or_create(user=request.user)
-        serializer = PreferenceSerializer(pref, data=request.data)
+        serializer = PreferenceSerializer(pref, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
         serializer.save()
         return Response(serializer.data)
