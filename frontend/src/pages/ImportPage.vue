@@ -26,6 +26,7 @@ const parentAmount = ref('')
 const parentCategoryId = ref(null)
 const error = ref('')
 const loading = ref(false)
+const parsing = ref(false)
 
 const expenseCategories = computed(() =>
   ledger.categories.filter((c) => c.type === 'expense')
@@ -61,9 +62,27 @@ async function onFileSelected(event) {
   const file = event.target.files?.[0]
   if (!file) return
   const buffer = await file.arrayBuffer()
-  const rows = parseCsv(decodeCsv(buffer))
+
+  let rows
+  if (/\.pdf$/i.test(file.name) || file.type === 'application/pdf') {
+    parsing.value = true
+    try {
+      // pdfjs は重いので使うときだけ読み込む
+      const { extractTableFromPdf, fillYear } = await import('../utils/pdf')
+      rows = fillYear(await extractTableFromPdf(buffer), dayjs().year())
+    } catch (e) {
+      error.value =
+        'PDF を読み取れませんでした。文字が埋め込まれていない (画像の) PDF は取込できません。'
+      parsing.value = false
+      return
+    }
+    parsing.value = false
+  } else {
+    rows = parseCsv(decodeCsv(buffer))
+  }
+
   if (!rows.length) {
-    error.value = 'CSV を読み取れませんでした。'
+    error.value = 'ファイルを読み取れませんでした。'
     return
   }
   rawRows.value = rows
@@ -181,10 +200,18 @@ async function submit() {
           {{ m.name }}
         </option>
       </select>
-      <label for="imp-file">明細 CSV ファイル</label>
-      <input id="imp-file" type="file" accept=".csv,text/csv" @change="onFileSelected" />
+      <label for="imp-file">明細ファイル (CSV / PDF)</label>
+      <input
+        id="imp-file"
+        type="file"
+        accept=".csv,.pdf,text/csv,application/pdf"
+        @change="onFileSelected"
+      />
+      <p v-if="parsing" class="hint">PDF を解析中...</p>
       <p class="hint">
-        VPASS / 楽天カード e-NAVI からダウンロードした明細 CSV に対応 (文字コードは自動判定)。
+        VPASS / 楽天カード e-NAVI の明細 CSV・PDF に対応 (文字コード・列は自動判定)。
+        PDF はレイアウトのばらつきで読み取れないことがあります。その場合は PC
+        版サイトから CSV をダウンロードするのが確実です。
       </p>
     </div>
 
