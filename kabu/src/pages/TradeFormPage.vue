@@ -4,6 +4,7 @@ import { useRouter } from 'vue-router'
 import api from '../api/client'
 import { useStocksStore } from '../stores/stocks'
 import { ACCOUNT_TYPES } from '../utils/format'
+import { lookupStockName, normalizeCode } from '../utils/stockNames'
 
 const props = defineProps({ id: { type: String, default: null } })
 const router = useRouter()
@@ -24,16 +25,26 @@ const form = ref({
 const error = ref('')
 const loading = ref(false)
 
-// 銘柄コードを入れたら過去の取引から銘柄名・証券会社を自動補完
+// 銘柄コードを入れたら銘柄マスタ (JPX 上場一覧) から銘柄名を、
+// 過去の取引から証券会社・口座区分を自動補完
+const autoName = ref('')
 watch(
   () => form.value.code,
-  (code) => {
-    if (props.id || !code || form.value.name) return
-    const past = stocks.trades.find((t) => t.code === code.toUpperCase())
+  async (code) => {
+    if (props.id) return
+    const c = normalizeCode(code)
+    if (!c) return
+    const past = stocks.trades.find((t) => t.code === c)
     if (past) {
-      form.value.name = past.name
       if (!form.value.broker) form.value.broker = past.broker
       form.value.account_type = past.account_type
+    }
+    // 手入力済みの銘柄名は上書きしない (自動補完した値だけ差し替え可)
+    if (form.value.name && form.value.name !== autoName.value) return
+    const name = (await lookupStockName(c)) || past?.name
+    if (name && (!form.value.name || form.value.name === autoName.value)) {
+      form.value.name = name
+      autoName.value = name
     }
   },
 )
@@ -42,6 +53,7 @@ async function submit() {
   error.value = ''
   loading.value = true
   try {
+    form.value.code = normalizeCode(form.value.code)
     await stocks.saveTrade(form.value, props.id)
     router.push('/trades')
   } catch (e) {

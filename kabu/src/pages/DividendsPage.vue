@@ -1,7 +1,8 @@
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useStocksStore } from '../stores/stocks'
 import { dateLabel, yen } from '../utils/format'
+import { lookupStockName, normalizeCode } from '../utils/stockNames'
 
 const stocks = useStocksStore()
 const loading = ref(true)
@@ -16,6 +17,20 @@ const form = ref({
   memo: '',
 })
 
+// 銘柄コードを入れたら銘柄マスタから銘柄名を自動補完 (手入力済みは上書きしない)
+const autoName = ref('')
+watch(
+  () => form.value.code,
+  async (code) => {
+    if (form.value.name && form.value.name !== autoName.value) return
+    const name = await lookupStockName(code)
+    if (name && (!form.value.name || form.value.name === autoName.value)) {
+      form.value.name = name
+      autoName.value = name
+    }
+  },
+)
+
 const yearTotal = computed(() => {
   const year = String(new Date().getFullYear())
   return stocks.dividends
@@ -27,6 +42,7 @@ async function submit() {
   error.value = ''
   saving.value = true
   try {
+    form.value.code = normalizeCode(form.value.code)
     await stocks.createDividend(form.value)
     form.value.code = ''
     form.value.name = ''
