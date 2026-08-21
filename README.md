@@ -53,23 +53,25 @@ docker compose build backend
 docker compose build frontend; docker compose up -d --force-recreate frontend
 ```
 
-## 本番デプロイ (カゴヤ VPS / Ubuntu)
+## 本番デプロイ (カゴヤ VPS / AlmaLinux)
 
 公開 URL: **http://v133-18-242-137.vir.kagoya.net/kakei/**(VPS 標準ドメインのサブパス公開。独自ドメイン取得後に HTTPS 化できる)
 
-構成: Nginx が `frontend/dist` を配信し `/kakei/api/`・`/kakei/admin/` を Gunicorn (unix ソケット) へプロキシ。サブパスのプレフィックスは gunicorn の `SCRIPT_NAME=/kakei` が処理。SQLite は `/opt/kakei/backend/data/db.sqlite3`。専用ユーザー `kakei` で運用し、本番では Docker を使わない。
+構成: Nginx が `frontend/dist` を配信し `/kakei/api/`・`/kakei/admin/` を Gunicorn (127.0.0.1:8001) へプロキシ。サブパスのプレフィックスは gunicorn の `SCRIPT_NAME=/kakei` が処理。SQLite は `/opt/kakei/backend/data/db.sqlite3`。専用ユーザー `kakei` で運用し、本番では Docker を使わない。SELinux は有効のまま運用する。
 
 ### 初回セットアップ
 
 ```bash
 # 1. 必要パッケージ (Node 22 は NodeSource から)
-sudo apt update
-sudo apt install -y python3.12-venv git nginx
-curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
-sudo apt install -y nodejs
+sudo dnf install -y python3.12 git nginx policycoreutils-python-utils
+curl -fsSL https://rpm.nodesource.com/setup_22.x | sudo bash -
+sudo dnf install -y nodejs
 
-# 2. 専用ユーザーとコード取得
-sudo adduser --system --group --home /opt/kakei --shell /bin/bash kakei
+# 2. 専用ユーザーとコード取得 (git clone は空ディレクトリにしか出来ない点に注意)
+sudo useradd -r -d /opt/kakei -s /bin/bash kakei
+sudo mkdir -p /opt/kakei
+sudo chown kakei:kakei /opt/kakei
+sudo chmod 755 /opt/kakei          # nginx が dist を読めるように
 sudo -u kakei git clone <リポジトリURL> /opt/kakei
 
 # 3. Python 環境
@@ -98,26 +100,40 @@ cd /opt/kakei/frontend
 sudo -u kakei npm ci
 sudo -u kakei npm run build
 
-# 8. systemd + Nginx (設定ファイルは VPS 標準ドメイン向けに設定済み)
+# 8. systemd (Gunicorn)
 sudo cp /opt/kakei/deploy/kakei-gunicorn.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now kakei-gunicorn
-sudo cp /opt/kakei/deploy/nginx-kakei.conf /etc/nginx/sites-available/kakei
-sudo ln -s /etc/nginx/sites-available/kakei /etc/nginx/sites-enabled/
-sudo nginx -t && sudo systemctl reload nginx
 
-# 9. deploy.sh 内の systemctl restart を kakei ユーザーに許可
+# 9. SELinux (nginx に静的ファイルの読取とバックエンド接続を許可)
+sudo setsebool -P httpd_can_network_connect 1
+sudo semanage fcontext -a -t httpd_sys_content_t "/opt/kakei/frontend/dist(/.*)?"
+sudo semanage fcontext -a -t httpd_sys_content_t "/opt/kakei/backend/staticfiles(/.*)?"
+sudo restorecon -R /opt/kakei
+
+# 10. Nginx (AlmaLinux は conf.d 方式)
+sudo cp /opt/kakei/deploy/nginx-kakei.conf /etc/nginx/conf.d/kakei.conf
+sudo nginx -t && sudo systemctl enable --now nginx && sudo systemctl reload nginx
+
+# 11. firewalld で HTTP を開放
+sudo firewall-cmd --permanent --add-service=http
+sudo firewall-cmd --reload
+
+# 12. deploy.sh 内の systemctl restart を kakei ユーザーに許可
 echo "kakei ALL=(root) NOPASSWD: /usr/bin/systemctl restart kakei-gunicorn" | sudo tee /etc/sudoers.d/kakei
 sudo chmod 440 /etc/sudoers.d/kakei
 ```
+
+カゴヤのコントロールパネル側にセキュリティグループ (パケットフィルタ) がある場合は、そちらでも 80 番ポートを開放すること。
 
 ### 独自ドメイン取得後の HTTPS 化 (任意)
 
 1. ドメインの A レコードを VPS の IP に向ける
 2. `deploy/nginx-kakei.conf` の `server_name` を新ドメインに変更して再配置
 3. `.env` の `ALLOWED_HOSTS`・`CSRF_TRUSTED_ORIGINS` (https://) を更新し `USE_HTTPS=true` に
-4. `sudo apt install -y certbot python3-certbot-nginx && sudo certbot --nginx -d <ドメイン>`
-5. `sudo systemctl restart kakei-gunicorn && sudo systemctl reload nginx`
+4. `sudo dnf install -y epel-release && sudo dnf install -y certbot python3-certbot-nginx && sudo certbot --nginx -d <ドメイン>`
+5. `sudo firewall-cmd --permanent --add-service=https && sudo firewall-cmd --reload`
+6. `sudo systemctl restart kakei-gunicorn && sudo systemctl reload nginx`
 
 ### 2回目以降の更新
 
