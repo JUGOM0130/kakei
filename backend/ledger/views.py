@@ -536,6 +536,7 @@ class ImportSuggestView(APIView):
                 "category_id": rule.category_id,
                 "shared": rule.shared,
                 "payer_share_percent": rule.payer_share_percent,
+                "recurring_payment_id": rule.recurring_payment_id,
             }
             for rule in rules
         }
@@ -594,6 +595,8 @@ class ImportTransactionsView(APIView):
                     memo=f"{row['used_date'].month}/{row['used_date'].day} {row['merchant']}",
                     group=member.group if shared else None,
                     payer_share_percent=share,
+                    # 定期支払に紐付けると、その月の固定費が支払済扱いになる
+                    recurring_payment=row.get("recurring_payment_id"),
                 )
                 MerchantRule.objects.update_or_create(
                     user=request.user,
@@ -602,6 +605,7 @@ class ImportTransactionsView(APIView):
                         "category": row["category_id"],
                         "shared": row["shared"],
                         "payer_share_percent": row.get("payer_share_percent"),
+                        "recurring_payment": row.get("recurring_payment_id"),
                     },
                 )
 

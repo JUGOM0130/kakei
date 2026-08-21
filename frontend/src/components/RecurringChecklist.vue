@@ -7,8 +7,9 @@ const props = defineProps({
 })
 const emit = defineEmits(['pay'])
 
+// 支払日順に並べる (支払済も日付の位置のまま表示する)
 const sorted = computed(() =>
-  [...props.items].sort((a, b) => a.paid - b.paid || a.day_of_month - b.day_of_month)
+  [...props.items].sort((a, b) => a.day_of_month - b.day_of_month || a.id - b.id)
 )
 </script>
 

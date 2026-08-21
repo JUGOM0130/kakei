@@ -21,6 +21,7 @@ const manualDateCol = ref(0)
 const manualMerchantCol = ref(1)
 const manualAmountCol = ref(2)
 const existingWarning = ref(false)
+const refundNote = ref(null) // {count, total, matched, unmatchedTotal}
 const parentDate = ref(dayjs().format('YYYY-MM-DD'))
 const parentAmount = ref('')
 const parentCategoryId = ref(null)
@@ -41,10 +42,13 @@ const columnCount = computed(() =>
   rawRows.value.length ? Math.max(...rawRows.value.map((r) => r.length)) : 0
 )
 
+const activeRecurring = computed(() => ledger.recurring.filter((r) => r.is_active))
+
 onMounted(async () => {
   await Promise.all([
     ledger.fetchCategories(),
     ledger.fetchPaymentMethods(),
+    ledger.fetchRecurring(),
     groupStore.loaded ? Promise.resolve() : groupStore.fetch(),
   ])
   paymentMethodId.value = ledger.paymentMethods.find((m) => m.name !== '現金')?.id ?? null
@@ -62,6 +66,7 @@ async function onFileSelected(event) {
   needManualMapping.value = false
   previewRows.value = []
   ocrCandidate.value = null
+  refundNote.value = null
   const file = event.target.files?.[0]
   if (!file) return
   const buffer = await file.arrayBuffer()
@@ -147,7 +152,7 @@ async function applyManualMapping() {
 }
 
 async function buildPreview(mapping) {
-  const { items, skipped } = extractRows(rawRows.value, mapping)
+  const { items, skipped, refunds } = extractRows(rawRows.value, mapping)
   skippedCount.value = skipped
   if (!items.length) {
     error.value = '取込める明細がありません。列の割り当てを確認してください。'
@@ -179,12 +184,47 @@ async function buildPreview(mapping) {
     return {
       ...item,
       include: true,
+      refunded: false,
       category_id: rule?.category_id ?? fallback,
       shared: rule?.shared ?? false,
       share_percent: rule?.payer_share_percent ?? myShare,
+      recurring_payment_id: rule?.recurring_payment_id ?? null,
     }
   })
-  parentAmount.value = String(allTotal.value)
+
+  // 返品 (マイナス行) の相殺: 同額の購入明細を探してチェックを自動で外す。
+  // 請求合計の初期値も返品を差し引いた実際の請求額にする
+  refundNote.value = null
+  let matched = 0
+  let refundTotal = 0
+  for (const refund of refunds ?? []) {
+    refundTotal += -refund.amount
+    const target =
+      previewRows.value.find(
+        (r) => r.include && !r.refunded && r.amount === -refund.amount && r.merchant === refund.merchant
+      ) ??
+      previewRows.value.find((r) => r.include && !r.refunded && r.amount === -refund.amount)
+    if (target) {
+      target.include = false
+      target.refunded = true
+      matched++
+    }
+  }
+  if (refunds?.length) {
+    refundNote.value = {
+      count: refunds.length,
+      total: refundTotal,
+      matched,
+      unmatched: refunds.length - matched,
+    }
+  }
+  parentAmount.value = String(allTotal.value - refundTotal)
+}
+
+function onRecurringLink(row) {
+  // 定期支払に紐付けたらカテゴリも定期支払側に合わせる
+  const rp = activeRecurring.value.find((r) => r.id === row.recurring_payment_id)
+  if (rp) row.category_id = rp.category.id
 }
 
 async function submit() {
@@ -219,6 +259,7 @@ async function submit() {
         category_id: r.category_id,
         shared: r.shared,
         payer_share_percent: r.shared ? Number(r.share_percent) : null,
+        recurring_payment_id: r.recurring_payment_id,
       })),
     })
     router.push('/transactions')
@@ -305,6 +346,16 @@ async function submit() {
         ⚠ この月のこのカードには取込済みの請求があります。二重取込にご注意ください。
       </div>
 
+      <div v-if="refundNote" class="card" :class="{ warn: refundNote.unmatched > 0 }">
+        <template v-if="refundNote.unmatched === 0">
+          ↩ 返品 {{ refundNote.count }}件 ({{ yen(refundNote.total) }}) を検出し、対応する明細のチェックを自動で外しました。請求合計も返品後の金額にしています。
+        </template>
+        <template v-else>
+          ⚠ 返品 {{ refundNote.count }}件 ({{ yen(refundNote.total) }}) のうち
+          {{ refundNote.unmatched }}件は対応する明細を特定できませんでした。取込合計が請求合計を超える場合は、該当する明細のチェックを手動で外してください。
+        </template>
+      </div>
+
       <div class="card">
         <div class="heading">請求 (親として1件登録)</div>
         <label for="imp-date">請求日 (引落日)</label>
@@ -332,7 +383,10 @@ async function submit() {
         <div v-for="(r, i) in previewRows" :key="i" class="row" :class="{ excluded: !r.include }">
           <input v-model="r.include" type="checkbox" class="check" />
           <div class="info">
-            <div class="merchant">{{ r.merchant }}</div>
+            <div class="merchant">
+              {{ r.merchant }}
+              <span v-if="r.refunded" class="refund-badge">返品相殺</span>
+            </div>
             <div class="sub">{{ r.used_date }}</div>
             <div class="controls">
               <select v-model="r.category_id" class="cat-select">
@@ -348,6 +402,19 @@ async function submit() {
               >
                 👥 {{ r.shared ? '共有' : '共有しない' }}
               </button>
+            </div>
+            <div v-if="activeRecurring.length" class="controls">
+              <select
+                v-model="r.recurring_payment_id"
+                class="cat-select"
+                :class="{ linked: r.recurring_payment_id }"
+                @change="onRecurringLink(r)"
+              >
+                <option :value="null">🔁 定期支払に紐付けない</option>
+                <option v-for="rp in activeRecurring" :key="rp.id" :value="rp.id">
+                  🔁 {{ rp.name }}
+                </option>
+              </select>
             </div>
           </div>
           <span class="amount">{{ yen(r.amount) }}</span>
@@ -479,6 +546,15 @@ async function submit() {
   font-weight: 700;
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
+}
+
+.refund-badge {
+  font-size: 0.65rem;
+  font-weight: 600;
+  border-radius: 999px;
+  padding: 1px 8px;
+  background: var(--warn-soft, #fdf3e2);
+  color: #8a5a12;
 }
 
 .total-bar {

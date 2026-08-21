@@ -545,6 +545,31 @@ class ImportTests(BaseTestCase):
         res = self.client.post("/api/import/transactions/", payload, format="json")
         self.assertEqual(res.status_code, 400)
 
+    def test_import_row_linked_to_recurring_marks_paid(self):
+        rp = RecurringPayment.objects.create(
+            user=self.alice,
+            name="携帯代",
+            amount=4000,
+            category=Category.objects.get(user=self.alice, name="通信"),
+            day_of_month=15,
+        )
+        payload = self._payload()
+        payload["rows"][0]["recurring_payment_id"] = rp.id
+        res = self.client.post("/api/import/transactions/", payload, format="json")
+        self.assertEqual(res.status_code, 201)
+
+        # 固定費が支払済扱いになる
+        data = self.client.get("/api/summary/monthly/", {"month": "2026-08"}).json()
+        item = next(i for i in data["recurring"]["items"] if i["id"] == rp.id)
+        self.assertTrue(item["paid"])
+        self.assertEqual(data["recurring"]["paid_total"], 1000)  # 明細の実額
+
+        # 学習: 次回 suggest に recurring_payment_id が含まれる
+        sug = self.client.post(
+            "/api/import/suggest/", {"merchants": ["セブンイレブン"]}, format="json"
+        ).json()["suggestions"]
+        self.assertEqual(sug["セブンイレブン"]["recurring_payment_id"], rp.id)
+
     def test_import_shared_requires_group(self):
         carol = User.objects.create_user("carol", password="testpass12345")
         seed_default_categories(carol)

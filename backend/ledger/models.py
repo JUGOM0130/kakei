@@ -197,6 +197,14 @@ class MerchantRule(models.Model):
     category = models.ForeignKey(
         Category, on_delete=models.CASCADE, related_name="merchant_rules"
     )
+    # この店名の明細を定期支払 (固定費) の支払として扱う
+    recurring_payment = models.ForeignKey(
+        RecurringPayment,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="merchant_rules",
+    )
     shared = models.BooleanField("共有", default=False)
     payer_share_percent = models.PositiveSmallIntegerField(
         null=True, blank=True, validators=[MaxValueValidator(100)]

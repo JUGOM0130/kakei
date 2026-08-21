@@ -147,6 +147,7 @@ export function extractRows(rows, { headerIndex, dateCol, merchantCol, amountCol
   }
 
   const items = []
+  const refunds = [] // マイナス金額 (返品) の行
   let skipped = 0
   for (const r of dated) {
     let amountIdx
@@ -176,13 +177,18 @@ export function extractRows(rows, { headerIndex, dateCol, merchantCol, amountCol
       .join(' ')
       .trim()
 
-    if (!merchant || !Number.isFinite(amount) || amount <= 0) {
+    if (!merchant || !Number.isFinite(amount) || amount === 0) {
       skipped++
       continue
     }
-    items.push({ used_date: parseDateCell(r[dateCol]), merchant, amount })
+    const used_date = parseDateCell(r[dateCol])
+    if (amount < 0) {
+      refunds.push({ used_date, merchant, amount })
+    } else {
+      items.push({ used_date, merchant, amount })
+    }
   }
   // 日付が読めず読み飛ばした行 (継続行・合計行など) も件数に含める
   skipped += dataRows.length - dated.length
-  return { items, skipped }
+  return { items, skipped, refunds }
 }

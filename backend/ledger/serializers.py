@@ -35,6 +35,11 @@ class UserPaymentMethodField(serializers.PrimaryKeyRelatedField):
         return PaymentMethod.objects.filter(user=self.context["request"].user)
 
 
+class UserRecurringPaymentField(serializers.PrimaryKeyRelatedField):
+    def get_queryset(self):
+        return RecurringPayment.objects.filter(user=self.context["request"].user)
+
+
 class UserParentTransactionField(serializers.PrimaryKeyRelatedField):
     """内訳の親: 自分の親レベル取引のみ (孫は構造上作れない)。"""
 
@@ -247,6 +252,8 @@ class ImportRowSerializer(serializers.Serializer):
     payer_share_percent = serializers.IntegerField(
         min_value=0, max_value=100, required=False, allow_null=True
     )
+    # この行を定期支払 (固定費) の支払として扱う
+    recurring_payment_id = UserRecurringPaymentField(required=False, allow_null=True)
 
 
 class ImportParentSerializer(serializers.Serializer):

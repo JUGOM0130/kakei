@@ -126,6 +126,31 @@ async function removeItem(item) {
   await loadTransaction()
 }
 
+// 登録後に内訳行の共有 (折半/自分のみ) を切り替える
+async function toggleItemShared(item) {
+  try {
+    await api.patch(`/transactions/${item.id}/`, {
+      shared: !item.is_shared,
+      payer_share_percent: !item.is_shared
+        ? (groupStore.me?.share_percent ?? 50)
+        : null,
+    })
+    await loadTransaction()
+  } catch (e) {
+    alert(e.response?.data?.shared?.[0] || '変更に失敗しました。')
+  }
+}
+
+async function updateItemShare(item, value) {
+  const pct = Number(value)
+  if (!Number.isFinite(pct) || pct < 0 || pct > 100) return
+  await api.patch(`/transactions/${item.id}/`, {
+    shared: true,
+    payer_share_percent: pct,
+  })
+  await loadTransaction()
+}
+
 async function submit(goBreakdown = false) {
   error.value = ''
   if (!categoryId.value) {
@@ -316,11 +341,29 @@ async function remove() {
       <div v-for="item in items" :key="item.id" class="item-row">
         <span class="chip-dot" :style="{ background: item.category.color }"></span>
         <div class="item-info">
-          <div class="item-name">
-            {{ item.category.name }}
-            <span v-if="item.is_shared" class="badge">👥 共有</span>
-          </div>
+          <div class="item-name">{{ item.category.name }}</div>
           <div v-if="item.memo" class="item-memo">{{ item.memo }}</div>
+          <div v-if="hasGroup" class="item-controls">
+            <button
+              class="chip chip-mini"
+              :class="{ active: item.is_shared }"
+              @click="toggleItemShared(item)"
+            >
+              👥 {{ item.is_shared ? '共有中' : '自分のみ' }}
+            </button>
+            <template v-if="item.is_shared">
+              <input
+                type="number"
+                inputmode="numeric"
+                min="0"
+                max="100"
+                class="mini-share"
+                :value="item.payer_share_percent"
+                @change="updateItemShare(item, $event.target.value)"
+              />
+              <span class="mini-share-label">% 自分</span>
+            </template>
+          </div>
         </div>
         <span class="item-amount">{{ yen(item.amount) }}</span>
         <button class="btn btn-danger btn-small" @click="removeItem(item)">削除</button>
@@ -473,6 +516,32 @@ async function remove() {
   padding: 1px 8px;
   background: #e8f5e9;
   color: var(--color-primary);
+}
+
+.item-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.chip-mini {
+  min-height: 34px;
+  padding: 3px 10px;
+  font-size: 0.75rem;
+}
+
+.mini-share {
+  width: 64px;
+  min-height: 34px;
+  padding: 3px 8px;
+  text-align: right;
+  font-size: 0.85rem;
+}
+
+.mini-share-label {
+  font-size: 0.72rem;
+  color: var(--color-text-sub);
 }
 
 .add-item {
