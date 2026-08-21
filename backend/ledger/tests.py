@@ -818,6 +818,10 @@ class ForecastExpenseTests(BaseTestCase):
         data = self.client.get("/api/summary/monthly/", {"month": "2026-08"}).json()
         self.assertEqual(data["expense_total"], 100000)  # 30000 + 未払い70000
         self.assertEqual(data["balance"], -100000)
+        # 内訳グラフにも未払い固定費がカテゴリとして入る
+        cats = {c["name"]: c["total"] for c in data["expense_by_category"]}
+        self.assertEqual(cats["住居"], 70000)
+        self.assertEqual(cats["食費"], 30000)
         fc = data["expense_forecast"]
         self.assertTrue(fc["enabled"])
         self.assertEqual(fc["actual"], 30000)

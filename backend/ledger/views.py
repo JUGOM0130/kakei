@@ -365,6 +365,8 @@ class MonthlySummaryView(APIView):
         # 「前月の給料で当月をやりくり」設定: 収入は前月分を表示・収支計算に使う
         pref = Preference.objects.filter(user=user).first()
         use_prev_income = pref.use_prev_month_income if pref else False
+        # 「支払合計予想」設定: 未払いの固定費を支出合計・内訳グラフに含める
+        forecast_expense = pref.forecast_expense if pref else False
         income_month = month
         if use_prev_income:
             prev_day = first - timedelta(days=1)
@@ -415,6 +417,47 @@ class MonthlySummaryView(APIView):
             else:
                 add_category(tx.category, tx.amount)
 
+        # 定期支払: その月が支払対象月のものだけを予定として並べる
+        paid_txs = {
+            tx.recurring_payment_id: tx for tx in month_txs if tx.recurring_payment_id
+        }
+        required_total = paid_total = remaining_total = 0
+        items = []
+        unpaid_rps = []
+        for rp in RecurringPayment.objects.filter(user=user, is_active=True).select_related(
+            "category"
+        ):
+            if not rp.is_due_in(first):
+                continue
+            tx = paid_txs.get(rp.id)
+            required_total += rp.amount
+            if tx:
+                paid_total += tx.amount
+            else:
+                remaining_total += rp.amount
+                unpaid_rps.append(rp)
+            items.append(
+                {
+                    "id": rp.id,
+                    "name": rp.name,
+                    "amount": rp.amount,
+                    "day_of_month": rp.day_of_month,
+                    "interval_months": rp.interval_months,
+                    "category": {
+                        "id": rp.category_id,
+                        "name": rp.category.name,
+                        "color": rp.category.color,
+                    },
+                    "paid": tx is not None,
+                    "transaction_id": tx.id if tx else None,
+                }
+            )
+
+        # 支払予想モード: 未払いの固定費もカテゴリ内訳 (グラフ) に含める
+        if forecast_expense:
+            for rp in unpaid_rps:
+                add_category(rp.category, rp.amount)
+
         income_by_category, expense_by_category = [], []
         for entry in sorted(category_totals.values(), key=lambda e: -e["total"]):
             type_ = entry.pop("type")
@@ -449,40 +492,6 @@ class MonthlySummaryView(APIView):
             income_total = sum(row["total"] for row in prev_rows)
 
         payment_methods = sorted(method_totals.values(), key=lambda m: -m["total"])
-
-        # 定期支払: その月が支払対象月のものだけを予定として並べる
-        paid_txs = {
-            tx.recurring_payment_id: tx for tx in month_txs if tx.recurring_payment_id
-        }
-        required_total = paid_total = remaining_total = 0
-        items = []
-        for rp in RecurringPayment.objects.filter(user=user, is_active=True).select_related(
-            "category"
-        ):
-            if not rp.is_due_in(first):
-                continue
-            tx = paid_txs.get(rp.id)
-            required_total += rp.amount
-            if tx:
-                paid_total += tx.amount
-            else:
-                remaining_total += rp.amount
-            items.append(
-                {
-                    "id": rp.id,
-                    "name": rp.name,
-                    "amount": rp.amount,
-                    "day_of_month": rp.day_of_month,
-                    "interval_months": rp.interval_months,
-                    "category": {
-                        "id": rp.category_id,
-                        "name": rp.category.name,
-                        "color": rp.category.color,
-                    },
-                    "paid": tx is not None,
-                    "transaction_id": tx.id if tx else None,
-                }
-            )
 
         member = get_membership(user)
 
@@ -525,7 +534,6 @@ class MonthlySummaryView(APIView):
             }
 
         # 支払合計予想: 未払いの固定費を支出に上乗せして月末見込みを表示する設定
-        forecast_expense = pref.forecast_expense if pref else False
         expense_actual = expense_total
         if forecast_expense:
             expense_total = expense_total + remaining_total
