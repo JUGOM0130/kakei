@@ -22,4 +22,16 @@ export default defineConfig({
       },
     },
   },
+  // 本番ビルドの動作確認用 (vite preview)
+  preview: {
+    host: true,
+    port: 4173,
+    proxy: {
+      '/kakei/api': {
+        target: process.env.VITE_PROXY_TARGET || 'http://127.0.0.1:8000',
+        changeOrigin: false,
+        rewrite: (path) => path.replace(/^\/kakei\/api/, '/api'),
+      },
+    },
+  },
 })

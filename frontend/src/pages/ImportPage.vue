@@ -76,11 +76,17 @@ async function onFileSelected(event) {
       rows = fillYear(await extractTableFromPdf(buffer), dayjs().year())
     } catch (e) {
       error.value =
-        'PDF を読み取れませんでした。文字が埋め込まれていない (画像の) PDF は取込できません。'
+        `PDF を読み取れませんでした (詳細: ${e?.message || e})。` +
+        'パスワード付き・画像スキャンの PDF は取込できません。'
       parsing.value = false
       return
     }
     parsing.value = false
+    if (!rows.length) {
+      error.value =
+        'PDF から文字を取り出せませんでした。画像として保存された PDF の可能性があります。'
+      return
+    }
   } else {
     rows = parseCsv(decodeCsv(buffer))
   }
@@ -219,10 +225,14 @@ async function submit() {
     <!-- 列の手動割り当て (自動判定に失敗したとき) -->
     <div v-if="needManualMapping" class="card">
       <div class="heading">列の割り当て</div>
-      <p class="hint">形式を自動判定できませんでした。各項目がどの列かを指定してください。</p>
+      <p class="hint">
+        形式を自動判定できませんでした。下の読み取り結果を見て、各項目がどの列かを指定してください
+        (うまくいかない場合はこの画面のスクリーンショットがあれば調整できます)。
+      </p>
       <div class="table-scroll">
         <table class="sample">
-          <tr v-for="(r, i) in rawRows.slice(0, 3)" :key="i">
+          <tr v-for="(r, i) in rawRows.slice(0, 10)" :key="i">
+            <td class="rowno">{{ i + 1 }}</td>
             <td v-for="(c, j) in r" :key="j">{{ c }}</td>
           </tr>
         </table>
@@ -347,6 +357,11 @@ async function submit() {
 .sample td {
   border: 1px solid var(--color-border);
   padding: 3px 6px;
+}
+
+.sample .rowno {
+  color: var(--color-text-sub);
+  background: var(--color-bg);
 }
 
 .apply {
