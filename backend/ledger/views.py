@@ -181,6 +181,34 @@ class TransactionViewSet(viewsets.ModelViewSet):
             raise PermissionDenied("共有相手の記録は削除できません。")
         instance.delete()
 
+    @action(detail=True, methods=["post"], url_path="items-share")
+    def items_share(self, request, pk=None):
+        """内訳行の共有設定を一括変更する"""
+        tx = self.get_object()
+        if tx.user_id != request.user.id:
+            raise PermissionDenied("共有相手の記録は編集できません。")
+        shared = bool(request.data.get("shared"))
+        if shared:
+            member = get_membership(request.user)
+            if member is None:
+                return Response(
+                    {"detail": "グループに参加していないため共有できません。"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            share = request.data.get("payer_share_percent")
+            if share is None:
+                share = member.share_percent
+            share = int(share)
+            if not 0 <= share <= 100:
+                return Response(
+                    {"detail": "負担割合は 0〜100 で指定してください。"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            updated = tx.items.update(group=member.group, payer_share_percent=share)
+        else:
+            updated = tx.items.update(group=None, payer_share_percent=None)
+        return Response({"updated": updated})
+
 
 class RecurringPaymentViewSet(viewsets.ModelViewSet):
     serializer_class = RecurringPaymentSerializer
@@ -580,20 +608,35 @@ class ImportSuggestView(APIView):
         }
 
         existing_statement = False
+        paid_recurring = {}
         method = data.get("payment_method_id")
         month = data.get("month")
-        if method and month:
+        if month:
             first, last = month_range(month)
-            existing_statement = Transaction.objects.filter(
+            if method:
+                existing_statement = Transaction.objects.filter(
+                    user=request.user,
+                    parent__isnull=True,
+                    payment_method=method,
+                    date__range=(first, last),
+                    items__isnull=False,
+                ).exists()
+            # その月に既に支払記録がある定期支払 (二重計上防止の判定用)
+            for tx in Transaction.objects.filter(
                 user=request.user,
-                parent__isnull=True,
-                payment_method=method,
+                recurring_payment__isnull=False,
                 date__range=(first, last),
-                items__isnull=False,
-            ).exists()
+            ):
+                paid_recurring[str(tx.recurring_payment_id)] = (
+                    "standalone" if tx.parent_id is None else "imported"
+                )
 
         return Response(
-            {"suggestions": suggestions, "existing_statement": existing_statement}
+            {
+                "suggestions": suggestions,
+                "existing_statement": existing_statement,
+                "paid_recurring": paid_recurring,
+            }
         )
 
 
@@ -607,6 +650,7 @@ class ImportTransactionsView(APIView):
 
         member = get_membership(request.user)
         parent_data = data["parent"]
+        month_first, month_last = month_range(parent_data["date"].strftime("%Y-%m"))
 
         with transaction.atomic():
             parent = Transaction.objects.create(
@@ -618,6 +662,20 @@ class ImportTransactionsView(APIView):
                 payment_method=data["payment_method_id"],
             )
             for row in data["rows"]:
+                # 定期支払への紐付け時の二重計上防止:
+                # 「支払済にする」で作られた単独記録があれば置き換え (削除)、
+                # 既に別の取込 (内訳行) で記録済みならこの行は紐付けない
+                rp = row.get("recurring_payment_id")
+                if rp is not None:
+                    existing = Transaction.objects.filter(
+                        user=request.user,
+                        recurring_payment=rp,
+                        date__range=(month_first, month_last),
+                    )
+                    if existing.filter(parent__isnull=False).exists():
+                        row["recurring_payment_id"] = None
+                    else:
+                        existing.filter(parent__isnull=True).delete()
                 shared = row["shared"] and member is not None
                 share = None
                 if shared:

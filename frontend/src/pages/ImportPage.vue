@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, nextTick, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import dayjs from 'dayjs'
 import api from '../api/client'
@@ -22,6 +22,8 @@ const manualMerchantCol = ref(1)
 const manualAmountCol = ref(2)
 const existingWarning = ref(false)
 const refundNote = ref(null) // {count, total, matched, unmatchedTotal}
+const paidRecurring = ref({}) // {rp_id: 'standalone'|'imported'} その月に支払記録済みの固定費
+const recurringNote = ref(null) // {replaced: [names], blocked: [names]}
 const parentDate = ref(dayjs().format('YYYY-MM-DD'))
 const parentAmount = ref('')
 const parentCategoryId = ref(null)
@@ -173,6 +175,7 @@ async function buildPreview(mapping) {
     })
     suggestions = data.suggestions
     existingWarning.value = data.existing_statement
+    paidRecurring.value = data.paid_recurring ?? {}
   } catch {
     /* 提案なしで続行 */
   }
@@ -219,12 +222,75 @@ async function buildPreview(mapping) {
     }
   }
   parentAmount.value = String(allTotal.value - refundTotal)
+
+  // 固定費との重複防止: 学習で自動リンクされた行のうち、
+  // その月に既に支払記録がある固定費を確認する
+  recurringNote.value = null
+  const replaced = []
+  const blocked = []
+  for (const row of previewRows.value) {
+    if (!row.recurring_payment_id) continue
+    const status = paidRecurring.value[String(row.recurring_payment_id)]
+    if (status === 'imported') {
+      // 別の取込で記録済み → 紐付け解除 (二重計上防止)
+      const rp = activeRecurring.value.find((r) => r.id === row.recurring_payment_id)
+      if (rp) blocked.push(rp.name)
+      row.recurring_payment_id = null
+    } else if (status === 'standalone') {
+      const rp = activeRecurring.value.find((r) => r.id === row.recurring_payment_id)
+      if (rp) replaced.push(rp.name)
+    }
+  }
+  if (replaced.length || blocked.length) {
+    recurringNote.value = { replaced, blocked }
+  }
+}
+
+// この明細の内容で定期支払 (固定費) を新規作成して紐付ける
+async function createRecurringFromRow(row) {
+  try {
+    const { data } = await api.post('/recurring-payments/', {
+      name: row.merchant.slice(0, 100),
+      amount: row.amount,
+      category_id: row.category_id,
+      payment_method_id: paymentMethodId.value,
+      day_of_month: Number(row.used_date.slice(8, 10)),
+      interval_months: 1,
+      is_shared: row.shared,
+      payer_share_percent: Number(row.share_percent),
+    })
+    await ledger.fetchRecurring()
+    await nextTick() // 新しい選択肢が描画されてから選択状態を反映する
+    row.recurring_payment_id = data.id
+  } catch (e) {
+    alert(e.response?.data?.detail || '固定費の登録に失敗しました。')
+  }
 }
 
 function onRecurringLink(row) {
-  // 定期支払に紐付けたらカテゴリも定期支払側に合わせる
   const rp = activeRecurring.value.find((r) => r.id === row.recurring_payment_id)
-  if (rp) row.category_id = rp.category.id
+  if (!rp) return
+  // 二重計上防止: 既に取込済みの固定費には紐付けない
+  const status = paidRecurring.value[String(rp.id)]
+  if (status === 'imported') {
+    alert(`「${rp.name}」はこの月に既に取込済みのため紐付けできません。`)
+    row.recurring_payment_id = null
+    return
+  }
+  if (status === 'standalone') {
+    alert(
+      `「${rp.name}」はこの月に「支払済にする」の記録があります。取込時にその記録をこの明細で置き換えます (二重計上にはなりません)。`
+    )
+  }
+  // カテゴリも定期支払側に合わせる
+  row.category_id = rp.category.id
+}
+
+function setAllShared(shared) {
+  for (const row of previewRows.value) {
+    if (row.refunded) continue
+    row.shared = shared
+  }
 }
 
 async function submit() {
@@ -375,10 +441,27 @@ async function submit() {
         </select>
       </div>
 
+      <div v-if="recurringNote" class="card" :class="{ warn: recurringNote.blocked.length }">
+        <template v-if="recurringNote.replaced.length">
+          🔁 {{ recurringNote.replaced.join('・') }} は「支払済にする」の単独記録があるため、取込時にこの明細で置き換えます (二重計上になりません)。<br />
+        </template>
+        <template v-if="recurringNote.blocked.length">
+          ⚠ {{ recurringNote.blocked.join('・') }} はこの月に既に取込済みのため、紐付けを解除しました。
+        </template>
+      </div>
+
       <div class="card">
         <div class="heading">
           明細 {{ previewRows.length }}件
           <span v-if="skippedCount" class="hint-inline">(読み飛ばし {{ skippedCount }}件)</span>
+        </div>
+        <div v-if="hasGroup" class="bulk-row">
+          <button class="btn btn-secondary btn-small" @click="setAllShared(true)">
+            👥 全行を折半にする
+          </button>
+          <button class="btn btn-secondary btn-small" @click="setAllShared(false)">
+            全行を自分のみに
+          </button>
         </div>
         <div v-for="(r, i) in previewRows" :key="i" class="row" :class="{ excluded: !r.include }">
           <input v-model="r.include" type="checkbox" class="check" />
@@ -403,7 +486,7 @@ async function submit() {
                 👥 {{ r.shared ? '共有' : '共有しない' }}
               </button>
             </div>
-            <div v-if="activeRecurring.length" class="controls">
+            <div class="controls">
               <select
                 v-model="r.recurring_payment_id"
                 class="cat-select"
@@ -415,6 +498,13 @@ async function submit() {
                   🔁 {{ rp.name }}
                 </option>
               </select>
+              <button
+                v-if="!r.recurring_payment_id"
+                class="chip chip-mini"
+                @click="createRecurringFromRow(r)"
+              >
+                ＋固定費に登録
+              </button>
             </div>
           </div>
           <span class="amount">{{ yen(r.amount) }}</span>
@@ -546,6 +636,12 @@ async function submit() {
   font-weight: 700;
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
+}
+
+.bulk-row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 8px;
 }
 
 .refund-badge {

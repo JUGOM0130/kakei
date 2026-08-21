@@ -126,6 +126,19 @@ async function removeItem(item) {
   await loadTransaction()
 }
 
+// 内訳行の共有を一括で切り替える
+async function setAllItemsShared(shared) {
+  try {
+    await api.post(`/transactions/${route.params.id}/items-share/`, {
+      shared,
+      payer_share_percent: shared ? (groupStore.me?.share_percent ?? 50) : null,
+    })
+    await loadTransaction()
+  } catch (e) {
+    alert(e.response?.data?.detail || '変更に失敗しました。')
+  }
+}
+
 // 登録後に内訳行の共有 (折半/自分のみ) を切り替える
 async function toggleItemShared(item) {
   try {
@@ -347,6 +360,14 @@ async function remove() {
       <p class="hint">
         合計 {{ yen(Number(amount || 0)) }} のうち、共有(折半)したいものやカテゴリを分けたいものを行として追加します。
       </p>
+      <div v-if="hasGroup && items.length" class="bulk-row">
+        <button class="btn btn-secondary btn-small" @click="setAllItemsShared(true)">
+          👥 内訳を一括で折半
+        </button>
+        <button class="btn btn-secondary btn-small" @click="setAllItemsShared(false)">
+          一括で自分のみ
+        </button>
+      </div>
 
       <div v-for="item in items" :key="item.id" class="item-row">
         <span class="chip-dot" :style="{ background: item.category.color }"></span>
@@ -543,6 +564,12 @@ async function remove() {
   align-items: center;
   gap: 6px;
   margin-top: 4px;
+}
+
+.bulk-row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 8px;
 }
 
 .item-cat-select {

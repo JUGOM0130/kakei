@@ -570,6 +570,79 @@ class ImportTests(BaseTestCase):
         ).json()["suggestions"]
         self.assertEqual(sug["セブンイレブン"]["recurring_payment_id"], rp.id)
 
+    def test_import_replaces_standalone_recurring_payment(self):
+        rp = RecurringPayment.objects.create(
+            user=self.alice,
+            name="携帯代",
+            amount=1000,
+            category=Category.objects.get(user=self.alice, name="通信"),
+            day_of_month=15,
+        )
+        # 先に「支払済にする」で単独記録を作る
+        res = self.client.post(
+            f"/api/recurring-payments/{rp.id}/pay/", {"month": "2026-08"}, format="json"
+        )
+        standalone_id = res.json()["id"]
+
+        payload = self._payload()
+        payload["rows"][0]["recurring_payment_id"] = rp.id
+        res = self.client.post("/api/import/transactions/", payload, format="json")
+        self.assertEqual(res.status_code, 201)
+
+        # 単独記録は置き換え (削除) され、支出合計は二重計上されない
+        self.assertFalse(Transaction.objects.filter(id=standalone_id).exists())
+        data = self.client.get("/api/summary/monthly/", {"month": "2026-08"}).json()
+        self.assertEqual(data["expense_total"], 10000)  # 親のみ
+        item = next(i for i in data["recurring"]["items"] if i["id"] == rp.id)
+        self.assertTrue(item["paid"])
+
+        # suggest は支払済情報を返す
+        sug = self.client.post(
+            "/api/import/suggest/",
+            {"merchants": [], "month": "2026-08"},
+            format="json",
+        ).json()
+        self.assertEqual(sug["paid_recurring"][str(rp.id)], "imported")
+
+        # 既に取込済みの固定費への再リンクは無効化される (二重リンク防止)
+        payload2 = self._payload()
+        payload2["rows"][0]["recurring_payment_id"] = rp.id
+        res = self.client.post("/api/import/transactions/", payload2, format="json")
+        self.assertEqual(res.status_code, 201)
+        linked = Transaction.objects.filter(
+            user=self.alice, recurring_payment=rp, date__month=8
+        )
+        self.assertEqual(linked.count(), 1)  # 増えていない
+
+    def test_items_share_bulk(self):
+        parent = self.client.post(
+            "/api/transactions/",
+            {"category_id": self.alice_other.id, "amount": 5000, "date": "2026-08-05"},
+            format="json",
+        ).json()
+        for amount in (1000, 2000):
+            self.client.post(
+                "/api/transactions/",
+                {"parent": parent["id"], "category_id": self.alice_food.id, "amount": amount},
+                format="json",
+            )
+        res = self.client.post(
+            f"/api/transactions/{parent['id']}/items-share/",
+            {"shared": True, "payer_share_percent": 60},
+            format="json",
+        )
+        self.assertEqual(res.json()["updated"], 2)
+        data = self.client.get("/api/summary/monthly/", {"month": "2026-08"}).json()
+        self.assertEqual(data["shared"]["total"], 3000)
+        self.assertEqual(data["shared"]["my_burden"], 1800)  # 60%
+
+        res = self.client.post(
+            f"/api/transactions/{parent['id']}/items-share/", {"shared": False}, format="json"
+        )
+        self.assertEqual(res.json()["updated"], 2)
+        data = self.client.get("/api/summary/monthly/", {"month": "2026-08"}).json()
+        self.assertEqual(data["shared"]["total"], 0)
+
     def test_import_shared_requires_group(self):
         carol = User.objects.create_user("carol", password="testpass12345")
         seed_default_categories(carol)
