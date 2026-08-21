@@ -1,0 +1,7 @@
+# 開発専用イメージ。本番は VPS 上で npm run build した dist/ を Nginx が配信する。
+FROM node:22-alpine
+
+WORKDIR /app
+
+COPY package.json package-lock.json ./
+RUN npm ci

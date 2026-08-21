@@ -1,0 +1,17 @@
+[Unit]
+Description=kakei gunicorn
+After=network.target
+
+[Service]
+User=kakei
+Group=kakei
+WorkingDirectory=/opt/kakei/backend
+RuntimeDirectory=kakei
+Environment=DJANGO_SETTINGS_MODULE=config.settings.prod
+EnvironmentFile=/opt/kakei/backend/.env
+ExecStart=/opt/kakei/backend/.venv/bin/gunicorn config.wsgi:application \
+  --workers 2 --bind unix:/run/kakei/gunicorn.sock --timeout 60
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
