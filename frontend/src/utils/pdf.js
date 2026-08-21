@@ -10,7 +10,13 @@ pdfjs.GlobalWorkerOptions.workerSrc = workerUrl
 // ArrayBuffer → 行×セルの2次元配列。
 // テキスト片を Y 座標でグルーピングして行に、X 座標の間隔でセルに分ける。
 export async function extractTableFromPdf(buffer) {
-  const doc = await pdfjs.getDocument({ data: buffer }).promise
+  const doc = await pdfjs.getDocument({
+    data: buffer,
+    // 日本語 CMap (Adobe-Japan1 / 90ms-RKSJ 等)。これが無いと
+    // カード会社の明細 PDF (非埋め込み CID フォント) から文字が取れない
+    cMapUrl: `${location.origin}${import.meta.env.BASE_URL}cmaps/`,
+    cMapPacked: true,
+  }).promise
   const rows = []
 
   for (let pageNo = 1; pageNo <= doc.numPages; pageNo++) {
@@ -53,11 +59,4 @@ export async function extractTableFromPdf(buffer) {
 
   await doc.destroy()
   return rows.filter((r) => r.length)
-}
-
-// "8/3" のような年なしの日付セルに年を補う (明細 PDF は年を省くことがある)
-export function fillYear(rows, year) {
-  return rows.map((r) =>
-    r.map((c) => (/^\d{1,2}\/\d{1,2}$/.test(c) ? `${year}/${c}` : c))
-  )
 }

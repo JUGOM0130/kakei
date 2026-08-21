@@ -6,7 +6,7 @@ import api from '../api/client'
 import { useLedgerStore } from '../stores/ledger'
 import { useGroupStore } from '../stores/group'
 import { yen } from '../utils/format'
-import { decodeCsv, parseCsv, detectColumns, extractRows } from '../utils/csv'
+import { decodeCsv, parseCsv, detectColumns, extractRows, fillYear } from '../utils/csv'
 
 const router = useRouter()
 const ledger = useLedgerStore()
@@ -27,6 +27,8 @@ const parentCategoryId = ref(null)
 const error = ref('')
 const loading = ref(false)
 const parsing = ref(false)
+const ocrCandidate = ref(null) // 画像PDFと判定されたファイル (OCRの提案用)
+const ocrRunning = ref(false)
 
 const expenseCategories = computed(() =>
   ledger.categories.filter((c) => c.type === 'expense')
@@ -59,6 +61,7 @@ async function onFileSelected(event) {
   error.value = ''
   needManualMapping.value = false
   previewRows.value = []
+  ocrCandidate.value = null
   const file = event.target.files?.[0]
   if (!file) return
   const buffer = await file.arrayBuffer()
@@ -72,19 +75,21 @@ async function onFileSelected(event) {
     parsing.value = true
     try {
       // pdfjs は重いので使うときだけ読み込む
-      const { extractTableFromPdf, fillYear } = await import('../utils/pdf')
+      const { extractTableFromPdf } = await import('../utils/pdf')
       rows = fillYear(await extractTableFromPdf(buffer), dayjs().year())
     } catch (e) {
       error.value =
         `PDF を読み取れませんでした (詳細: ${e?.message || e})。` +
-        'パスワード付き・画像スキャンの PDF は取込できません。'
+        'パスワード付きの PDF は解除してから試してください。'
+      ocrCandidate.value = file // OCR でなら読める可能性がある
       parsing.value = false
       return
     }
     parsing.value = false
     if (!rows.length) {
-      error.value =
-        'PDF から文字を取り出せませんでした。画像として保存された PDF の可能性があります。'
+      // 文字なし = 画像PDF → サーバーOCR を提案
+      ocrCandidate.value = file
+      error.value = ''
       return
     }
   } else {
@@ -101,6 +106,34 @@ async function onFileSelected(event) {
     await buildPreview(mapping)
   } else {
     needManualMapping.value = true
+  }
+}
+
+async function runOcr() {
+  if (!ocrCandidate.value) return
+  error.value = ''
+  ocrRunning.value = true
+  try {
+    const form = new FormData()
+    form.append('file', ocrCandidate.value)
+    const { data } = await api.post('/import/ocr/', form, { timeout: 180000 })
+    const rows = fillYear(data.rows, dayjs().year())
+    if (!rows.length) {
+      error.value = 'OCR でも明細を見つけられませんでした。'
+      return
+    }
+    rawRows.value = rows
+    ocrCandidate.value = null
+    const mapping = detectColumns(rows)
+    if (mapping) {
+      await buildPreview(mapping)
+    } else {
+      needManualMapping.value = true
+    }
+  } catch (e) {
+    error.value = e.response?.data?.detail || 'OCR 処理に失敗しました。'
+  } finally {
+    ocrRunning.value = false
   }
 }
 
@@ -220,6 +253,20 @@ async function submit() {
         PDF はレイアウトのばらつきで読み取れないことがあります。その場合は PC
         版サイトから CSV をダウンロードするのが確実です。
       </p>
+    </div>
+
+    <!-- 画像PDF → サーバーOCRの提案 -->
+    <div v-if="ocrCandidate" class="card">
+      <div class="heading">画像タイプの PDF です</div>
+      <p class="hint">
+        この PDF には文字データが埋め込まれていません。サーバーで文字認識 (OCR)
+        して読み取れます (最大3ページ・1分ほどかかることがあります)。
+        <strong>金額や店名を誤認識することがあるため、取込前にプレビューを必ず確認してください。</strong>
+      </p>
+      <p v-if="error" class="error-message">{{ error }}</p>
+      <button class="btn" :disabled="ocrRunning" @click="runOcr">
+        {{ ocrRunning ? 'サーバーで解析中...' : 'サーバーで読み取る (OCR)' }}
+      </button>
     </div>
 
     <!-- 列の手動割り当て (自動判定に失敗したとき) -->

@@ -15,6 +15,7 @@ urlpatterns = [
     path("summary/monthly/", views.MonthlySummaryView.as_view()),
     path("balance/", views.BalanceView.as_view()),
     path("import/suggest/", views.ImportSuggestView.as_view()),
+    path("import/ocr/", views.ImportOcrView.as_view()),
     path("import/transactions/", views.ImportTransactionsView.as_view()),
     path("group/", views.GroupView.as_view()),
     path("group/join/", views.GroupJoinView.as_view()),

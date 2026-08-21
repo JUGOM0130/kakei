@@ -10,8 +10,11 @@ from django.db.models.deletion import ProtectedError
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied, ValidationError
+from rest_framework.parsers import MultiPartParser
 from rest_framework.response import Response
 from rest_framework.views import APIView
+
+from .ocr import OcrUnavailableError, ocr_pdf
 
 from .models import (
     AccountBalance,
@@ -475,6 +478,44 @@ class MonthlySummaryView(APIView):
                 "balance_forecast": balance_forecast,
             }
         )
+
+
+class ImportOcrView(APIView):
+    """画像 PDF をアップロードして OCR で明細の行データに変換する"""
+
+    parser_classes = [MultiPartParser]
+
+    def post(self, request):
+        f = request.FILES.get("file")
+        if f is None:
+            return Response(
+                {"detail": "ファイルがありません。"}, status=status.HTTP_400_BAD_REQUEST
+            )
+        if f.size > 15 * 1024 * 1024:
+            return Response(
+                {"detail": "ファイルが大きすぎます (15MB まで)。"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        head = f.read(5)
+        f.seek(0)
+        if head != b"%PDF-":
+            return Response(
+                {"detail": "PDF ファイルではありません。"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            rows = ocr_pdf(f.read())
+        except OcrUnavailableError as e:
+            return Response(
+                {"detail": f"サーバーに OCR ツールが未導入です ({e})。"},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+        except Exception:
+            return Response(
+                {"detail": "OCR 処理に失敗しました。"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return Response({"rows": rows, "max_pages": 3})
 
 
 class ImportSuggestView(APIView):

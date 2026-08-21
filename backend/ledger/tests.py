@@ -563,6 +563,47 @@ class ImportTests(BaseTestCase):
         self.assertEqual(res.status_code, 400)
 
 
+class OcrTests(BaseTestCase):
+    def test_parse_tsv_reconstructs_rows_and_cells(self):
+        from .ocr import parse_tsv
+
+        header = "level\tpage\tblock\tpar\tline\tword\tleft\ttop\twidth\theight\tconf\ttext"
+        lines = [
+            header,
+            "5\t1\t1\t1\t1\t1\t100\t100\t80\t20\t96\t2026/08/03",
+            "5\t1\t1\t1\t1\t2\t300\t102\t60\t20\t95\tSEVEN",
+            # 直前との隙間 5px → 同じセルに連結される
+            "5\t1\t1\t1\t1\t3\t365\t101\t70\t20\t95\tELEVEN",
+            "5\t1\t1\t1\t1\t4\t700\t100\t50\t20\t92\t1,000",
+            "5\t1\t1\t1\t2\t1\t100\t160\t80\t20\t96\t2026/08/10",
+            "5\t1\t1\t1\t2\t2\t300\t161\t60\t20\t95\tGUSTO",
+            "5\t1\t1\t1\t2\t3\t700\t159\t50\t20\t92\t1,200",
+            # conf -1 の構造行は無視される
+            "4\t1\t1\t1\t3\t0\t0\t200\t500\t20\t-1\t",
+        ]
+        rows = parse_tsv("\n".join(lines), gap_px=25)
+        self.assertEqual(
+            rows,
+            [
+                ["2026/08/03", "SEVENELEVEN", "1,000"],
+                ["2026/08/10", "GUSTO", "1,200"],
+            ],
+        )
+
+    def test_ocr_endpoint_validations(self):
+        from django.core.files.uploadedfile import SimpleUploadedFile
+
+        self.client.force_login(self.alice)
+        res = self.client.post("/api/import/ocr/", {}, format="multipart")
+        self.assertEqual(res.status_code, 400)
+        res = self.client.post(
+            "/api/import/ocr/",
+            {"file": SimpleUploadedFile("a.pdf", b"not a pdf at all")},
+            format="multipart",
+        )
+        self.assertEqual(res.status_code, 400)
+
+
 class BalanceTests(BaseTestCase):
     def test_balance_forecast(self):
         self.client.force_login(self.alice)
