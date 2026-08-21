@@ -271,6 +271,16 @@ class SharedTransactionTests(BaseTestCase):
         self.assertEqual(shared["partner_paid"], 3000)
         self.assertEqual(shared["my_burden"], 5900)
         self.assertEqual(shared["partner_burden"], 7100)
+        # 立替明細 (元金・割合・実質支払い額)
+        self.assertEqual(len(shared["my_items"]), 1)
+        mine = shared["my_items"][0]
+        self.assertEqual(mine["amount"], 10000)
+        self.assertEqual(mine["percent"], 50)
+        self.assertEqual(mine["burden"], 5000)
+        theirs = shared["partner_items"][0]
+        self.assertEqual(theirs["amount"], 3000)
+        self.assertEqual(theirs["percent"], 70)
+        self.assertEqual(theirs["burden"], 2100)
         self.assertEqual(shared["transfer"]["amount"], 4100)
         self.assertEqual(shared["transfer"]["direction"], "receive")
         self.assertIsNone(shared["settlement"])

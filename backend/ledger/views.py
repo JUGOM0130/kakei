@@ -283,16 +283,34 @@ def build_shared_summary(user, member, first, last):
     others = [m for m in group.members.select_related("user") if m.user_id != user.id]
     partner = others[0].user if others else None
 
-    shared_txs = Transaction.objects.filter(group=group, date__range=(first, last))
+    shared_txs = Transaction.objects.filter(
+        group=group, date__range=(first, last)
+    ).select_related("category")
     total = my_paid = my_burden = 0
+    my_items, partner_items = [], []
     for tx in shared_txs:
         total += tx.amount
         pct = tx.payer_share_percent if tx.payer_share_percent is not None else 50
+        # 明細 (立替詳細のリスト表示用): 割合・実質は支払った人の視点
+        entry = {
+            "id": tx.id,
+            "date": str(tx.date),
+            "memo": tx.memo,
+            "category": tx.category.name,
+            "color": tx.category.color,
+            "amount": tx.amount,  # 元金
+            "percent": pct,  # 支払者の負担割合
+            "burden": round_share(tx.amount, pct),  # 支払者の実質支払い額
+        }
         if tx.user_id == user.id:
             my_paid += tx.amount
             my_burden += round_share(tx.amount, pct)
+            my_items.append(entry)
         else:
             my_burden += round_share(tx.amount, 100 - pct)
+            partner_items.append(entry)
+    my_items.sort(key=lambda e: e["date"])
+    partner_items.sort(key=lambda e: e["date"])
 
     partner_paid = total - my_paid
     partner_burden = total - my_burden
@@ -326,6 +344,8 @@ def build_shared_summary(user, member, first, last):
         "partner_paid": partner_paid,
         "my_burden": my_burden,
         "partner_burden": partner_burden,
+        "my_items": my_items,
+        "partner_items": partner_items,
         "transfer": transfer,
         "settlement": (
             {
