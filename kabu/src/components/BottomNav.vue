@@ -4,6 +4,7 @@
     <RouterLink to="/trades" class="nav-item"><span class="icon">📄</span>履歴</RouterLink>
     <RouterLink to="/trades/new" class="fab" aria-label="取引を追加">＋</RouterLink>
     <RouterLink to="/positions" class="nav-item"><span class="icon">📊</span>保有</RouterLink>
+    <RouterLink to="/watch" class="nav-item"><span class="icon">🎯</span>ウォッチ</RouterLink>
     <RouterLink to="/dividends" class="nav-item"><span class="icon">💰</span>配当</RouterLink>
   </nav>
 </template>

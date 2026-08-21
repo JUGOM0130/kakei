@@ -1,11 +1,12 @@
 from datetime import date
 from decimal import Decimal
+from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 from rest_framework.test import APITestCase
 
-from .models import Dividend, Trade
+from .models import Dividend, StockPrice, Trade, Watch
 from .services import open_positions, scan_trades
 
 
@@ -193,6 +194,51 @@ class SummaryApiTests(APITestCase):
         self.assertEqual(res.data["imported"], 0)
         self.assertEqual(res.data["skipped_manual"], 1)
         self.assertEqual(Trade.objects.filter(user=self.user).count(), 1)
+
+    def test_watch_reached(self):
+        StockPrice.objects.create(user=self.user, code="7203", price=Decimal("2450"))
+        res = self.client.post(
+            "/api/stocks/watches/",
+            {"code": "7203", "name": "トヨタ", "kind": "buy", "target_price": "2500"},
+        )
+        self.assertEqual(res.status_code, 201)
+        res = self.client.get("/api/stocks/watches/")
+        row = res.data[0]
+        self.assertEqual(row["current_price"], 2450.0)
+        self.assertTrue(row["reached"])  # 買い目標: 現在値 <= 目標
+        # 売り目標: 現在値 >= 目標でないと未達成
+        self.client.post(
+            "/api/stocks/watches/",
+            {"code": "7203", "name": "トヨタ", "kind": "sell", "target_price": "3000"},
+        )
+        res = self.client.get("/api/stocks/watches/")
+        sell_row = next(r for r in res.data if r["kind"] == "sell")
+        self.assertFalse(sell_row["reached"])
+
+    def test_prices_refresh_updates_positions_and_watches(self):
+        make_trade(self.user, code="7203")
+        Watch.objects.create(
+            user=self.user, code="9432", name="NTT", kind="buy", target_price=Decimal("140")
+        )
+        with patch("stocks.views.fetch_quotes") as mock_fetch:
+            mock_fetch.return_value = ({"7203": Decimal("3132"), "9432": Decimal("150.5")}, [])
+            res = self.client.post("/api/stocks/prices/refresh/", {}, format="json")
+            mock_fetch.assert_called_once_with(["7203", "9432"])
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.data["prices"]["7203"], 3132.0)
+        self.assertEqual(StockPrice.objects.filter(user=self.user).count(), 2)
+        # 保有一覧に現在値が反映される
+        res = self.client.get("/api/stocks/positions/")
+        self.assertEqual(res.data["positions"][0]["current_price"], 3132.0)
+
+    def test_stock_info_settlement_month(self):
+        res = self.client.put("/api/stocks/info/7203/", {"settlement_month": 3}, format="json")
+        self.assertEqual(res.status_code, 200)
+        make_trade(self.user, code="7203")
+        res = self.client.get("/api/stocks/positions/")
+        self.assertEqual(res.data["positions"][0]["settlement_month"], 3)
+        res = self.client.put("/api/stocks/info/7203/", {"settlement_month": 13}, format="json")
+        self.assertEqual(res.status_code, 400)
 
     def test_positions_with_price(self):
         make_trade(self.user, quantity=200, price=Decimal("1000"), fee=0)

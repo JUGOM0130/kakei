@@ -9,8 +9,14 @@ from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from .models import Dividend, StockPrice, Trade
-from .serializers import DividendSerializer, StockPriceSerializer, TradeSerializer
+from .models import Dividend, StockInfo, StockPrice, Trade, Watch
+from .quotes import fetch_quotes
+from .serializers import (
+    DividendSerializer,
+    StockPriceSerializer,
+    TradeSerializer,
+    WatchSerializer,
+)
 from .services import open_positions, scan_trades
 
 
@@ -153,7 +159,10 @@ class PositionsView(APIView):
 
     def get(self, request):
         positions = open_positions(Trade.objects.filter(user=request.user))
-        prices = {p.code: p.price for p in StockPrice.objects.filter(user=request.user)}
+        prices = {p.code: p for p in StockPrice.objects.filter(user=request.user)}
+        infos = {
+            i.code: i.settlement_month for i in StockInfo.objects.filter(user=request.user)
+        }
         yen = Decimal("1")
         rows = []
         for (code, account_type), pos in positions.items():
@@ -168,13 +177,18 @@ class PositionsView(APIView):
                 "current_price": None,
                 "market_value": None,
                 "unrealized_pnl": None,
+                "price_updated_at": None,
+                "settlement_month": infos.get(code),
             }
             price = prices.get(code)
             if price is not None:
-                market_value = int((price * pos["qty"]).quantize(yen, rounding=ROUND_HALF_UP))
-                row["current_price"] = float(price)
+                market_value = int(
+                    (price.price * pos["qty"]).quantize(yen, rounding=ROUND_HALF_UP)
+                )
+                row["current_price"] = float(price.price)
                 row["market_value"] = market_value
                 row["unrealized_pnl"] = market_value - cost
+                row["price_updated_at"] = price.updated_at.isoformat()
             rows.append(row)
         rows.sort(key=lambda r: r["cost"], reverse=True)
         totals = {
@@ -185,6 +199,71 @@ class PositionsView(APIView):
             ),
         }
         return Response({"positions": rows, "totals": totals})
+
+
+class WatchViewSet(viewsets.ModelViewSet):
+    """目標価格 (この価格まで来たら買い/売り) のウォッチリスト。"""
+
+    serializer_class = WatchSerializer
+
+    def get_queryset(self):
+        return Watch.objects.filter(user=self.request.user)
+
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        context["prices"] = {
+            p.code: p for p in StockPrice.objects.filter(user=self.request.user)
+        }
+        context["infos"] = {
+            i.code: i.settlement_month
+            for i in StockInfo.objects.filter(user=self.request.user)
+        }
+        return context
+
+    def perform_create(self, serializer):
+        serializer.save(user=self.request.user)
+
+
+class PricesRefreshView(APIView):
+    """保有中 + ウォッチ中の銘柄の株価を取得して StockPrice を更新する。"""
+
+    def post(self, request):
+        codes = request.data.get("codes")
+        if not codes:
+            positions = open_positions(Trade.objects.filter(user=request.user))
+            codes = {code for code, _ in positions}
+            codes |= set(Watch.objects.filter(user=request.user).values_list("code", flat=True))
+        codes = sorted({str(c).strip().upper() for c in codes if str(c).strip()})[:50]
+        if not codes:
+            return Response({"prices": {}, "failed": []})
+        prices, failed = fetch_quotes(codes)
+        for code, price in prices.items():
+            StockPrice.objects.update_or_create(
+                user=request.user, code=code, defaults={"price": price}
+            )
+        return Response(
+            {"prices": {c: float(p) for c, p in prices.items()}, "failed": failed}
+        )
+
+
+class StockInfoView(APIView):
+    """銘柄ごとの決算月を登録・変更する。"""
+
+    def put(self, request, code):
+        month = request.data.get("settlement_month")
+        if month is not None:
+            try:
+                month = int(month)
+            except (TypeError, ValueError):
+                raise ValidationError({"settlement_month": "1〜12 で指定してください。"})
+            if not 1 <= month <= 12:
+                raise ValidationError({"settlement_month": "1〜12 で指定してください。"})
+        StockInfo.objects.update_or_create(
+            user=request.user,
+            code=code.strip().upper(),
+            defaults={"settlement_month": month},
+        )
+        return Response({"code": code.strip().upper(), "settlement_month": month})
 
 
 class PriceView(APIView):

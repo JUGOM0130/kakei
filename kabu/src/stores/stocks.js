@@ -9,6 +9,9 @@ export const useStocksStore = defineStore('stocks', {
     dividends: [],
     positions: [],
     positionTotals: { cost: 0, market_value: 0, unrealized_pnl: 0 },
+    watches: [],
+    refreshing: false,
+    priceFailed: [],
   }),
   actions: {
     async fetchSummary() {
@@ -50,6 +53,42 @@ export const useStocksStore = defineStore('stocks', {
     async setPrice(code, price) {
       await api.put(`/stocks/prices/${code}/`, { price })
       await this.fetchPositions()
+    },
+    // 保有中 + ウォッチ中の銘柄の株価を API から取得して反映する
+    async refreshPrices() {
+      this.refreshing = true
+      try {
+        const { data } = await api.post('/stocks/prices/refresh/', {})
+        this.priceFailed = data.failed
+      } finally {
+        this.refreshing = false
+      }
+    },
+    async fetchWatches() {
+      const { data } = await api.get('/stocks/watches/')
+      this.watches = data
+    },
+    async createWatch(payload) {
+      await api.post('/stocks/watches/', payload)
+      await this.fetchWatches()
+    },
+    async updateWatch(id, payload) {
+      await api.patch(`/stocks/watches/${id}/`, payload)
+      await this.fetchWatches()
+    },
+    async deleteWatch(id) {
+      await api.delete(`/stocks/watches/${id}/`)
+      this.watches = this.watches.filter((w) => w.id !== id)
+    },
+    // 決算月の設定 (保有・ウォッチ両方に反映)
+    async setSettlementMonth(code, month) {
+      await api.put(`/stocks/info/${code}/`, { settlement_month: month })
+      this.positions = this.positions.map((p) =>
+        p.code === code ? { ...p, settlement_month: month } : p,
+      )
+      this.watches = this.watches.map((w) =>
+        w.code === code ? { ...w, settlement_month: month } : w,
+      )
     },
   },
 })

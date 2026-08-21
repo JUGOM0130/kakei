@@ -1,12 +1,23 @@
 <script setup>
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useStocksStore } from '../stores/stocks'
-import { accountLabel, pnlClass, signedYen, yen } from '../utils/format'
+import SettlementMonthSelect from '../components/SettlementMonthSelect.vue'
+import { accountLabel, pnlClass, signedYen, timeLabel, yen } from '../utils/format'
 
 const stocks = useStocksStore()
 const loading = ref(true)
 const priceInputs = ref({})
 const saving = ref('')
+
+const priceTime = computed(() => {
+  const times = stocks.positions.map((p) => p.price_updated_at).filter(Boolean)
+  return times.length ? timeLabel(times.sort().at(-1)) : ''
+})
+
+async function refresh() {
+  await stocks.refreshPrices()
+  await stocks.fetchPositions()
+}
 
 async function savePrice(row) {
   const price = priceInputs.value[row.code]
@@ -21,16 +32,21 @@ async function savePrice(row) {
 
 onMounted(async () => {
   await stocks.fetchPositions()
-  for (const row of stocks.positions) {
-    if (row.current_price != null) priceInputs.value[row.code] = row.current_price
-  }
   loading.value = false
+  // 表示後にバックグラウンドで株価を最新化
+  refresh().catch(() => {})
 })
 </script>
 
 <template>
   <div class="page">
-    <h1 class="page-title">保有一覧</h1>
+    <div class="title-row">
+      <h1 class="page-title">保有一覧</h1>
+      <button class="btn btn-secondary btn-small" :disabled="stocks.refreshing" @click="refresh">
+        {{ stocks.refreshing ? '取得中…' : '株価更新' }}
+      </button>
+    </div>
+    <p v-if="priceTime" class="price-time">株価: {{ priceTime }} 時点 (Yahoo!ファイナンス)</p>
 
     <div v-if="stocks.positions.length" class="card totals">
       <div>
@@ -71,28 +87,37 @@ onMounted(async () => {
           <span>{{ row.avg_price.toLocaleString() }}円</span>
         </div>
         <div>
-          <span class="label">取得額</span>
-          <span>{{ yen(row.cost) }}</span>
+          <span class="label">現在値</span>
+          <span v-if="row.current_price != null">{{ row.current_price.toLocaleString() }}円</span>
+          <span v-else>—</span>
         </div>
-        <div v-if="row.unrealized_pnl != null">
+        <div>
           <span class="label">評価損益</span>
-          <span :class="pnlClass(row.unrealized_pnl)">{{ signedYen(row.unrealized_pnl) }}</span>
+          <span v-if="row.unrealized_pnl != null" :class="pnlClass(row.unrealized_pnl)">
+            {{ signedYen(row.unrealized_pnl) }}
+          </span>
+          <span v-else>—</span>
         </div>
       </div>
-      <div class="price-row">
+      <div class="foot">
+        <span class="sub">取得額 {{ yen(row.cost) }}<template v-if="row.market_value != null"> / 評価額 {{ yen(row.market_value) }}</template></span>
+        <SettlementMonthSelect :code="row.code" :month="row.settlement_month" />
+      </div>
+      <!-- 株価を自動取得できなかった銘柄だけ手動入力を出す -->
+      <div v-if="row.current_price == null || stocks.priceFailed.includes(row.code)" class="price-row">
         <input
           v-model.number="priceInputs[row.code]"
           type="number"
           min="0"
           step="0.0001"
-          placeholder="現在値を入力すると評価損益を表示"
+          placeholder="自動取得できないため現在値を手入力"
         />
         <button
           class="btn btn-small"
           :disabled="saving === row.code || !priceInputs[row.code]"
           @click="savePrice(row)"
         >
-          更新
+          保存
         </button>
       </div>
     </div>
@@ -100,6 +125,23 @@ onMounted(async () => {
 </template>
 
 <style scoped>
+.title-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 4px;
+}
+
+.title-row .page-title {
+  margin-bottom: 0;
+}
+
+.price-time {
+  font-size: 0.75rem;
+  color: var(--color-text-sub);
+  margin-bottom: 12px;
+}
+
 .totals {
   display: flex;
   justify-content: space-around;
@@ -142,10 +184,22 @@ onMounted(async () => {
   font-size: 0.95rem;
 }
 
+.foot {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 10px;
+}
+
+.sub {
+  font-size: 0.8rem;
+  color: var(--color-text-sub);
+}
+
 .price-row {
   display: flex;
   gap: 8px;
-  margin-top: 12px;
+  margin-top: 10px;
 }
 
 .price-row input {

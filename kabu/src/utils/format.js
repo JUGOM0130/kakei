@@ -13,6 +13,15 @@ export function pnlClass(n) {
   return v > 0 ? 'gain' : v < 0 ? 'loss' : ''
 }
 
+// ISO 日時 → '8/22 09:15' (株価の取得時点表示用)
+export function timeLabel(iso) {
+  if (!iso) return ''
+  const d = new Date(iso)
+  const hh = String(d.getHours()).padStart(2, '0')
+  const mm = String(d.getMinutes()).padStart(2, '0')
+  return `${d.getMonth() + 1}/${d.getDate()} ${hh}:${mm}`
+}
+
 export function dateLabel(dateStr) {
   const d = new Date(dateStr + 'T00:00:00')
   const week = ['日', '月', '火', '水', '木', '金', '土'][d.getDay()]

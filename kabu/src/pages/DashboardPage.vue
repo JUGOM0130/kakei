@@ -1,5 +1,5 @@
 <script setup>
-import { onMounted } from 'vue'
+import { computed, onMounted } from 'vue'
 import { useAuthStore } from '../stores/auth'
 import { useStocksStore } from '../stores/stocks'
 import { signedYen, pnlClass, yen } from '../utils/format'
@@ -7,6 +7,22 @@ import MonthlyBar from '../components/MonthlyBar.vue'
 
 const auth = useAuthStore()
 const stocks = useStocksStore()
+
+// 目標達成したウォッチ (買い/売りチャンス)
+const reachedWatches = computed(() => stocks.watches.filter((w) => w.reached))
+
+// 今月が決算月の銘柄 (保有 + ウォッチ)
+const settlementThisMonth = computed(() => {
+  const month = new Date().getMonth() + 1
+  const map = new Map()
+  for (const p of stocks.positions) {
+    if (p.settlement_month === month) map.set(p.code, p.name)
+  }
+  for (const w of stocks.watches) {
+    if (w.settlement_month === month) map.set(w.code, w.name)
+  }
+  return [...map.entries()].map(([code, name]) => ({ code, name }))
+})
 
 async function changeYear(delta) {
   stocks.year += delta
@@ -18,7 +34,11 @@ async function logout() {
   location.href = import.meta.env.BASE_URL + 'login'
 }
 
-onMounted(() => stocks.fetchSummary())
+onMounted(() => {
+  stocks.fetchSummary()
+  stocks.fetchWatches().catch(() => {})
+  stocks.fetchPositions().catch(() => {})
+})
 </script>
 
 <template>
@@ -32,6 +52,24 @@ onMounted(() => stocks.fetchSummary())
       <button aria-label="前の年" @click="changeYear(-1)">◀</button>
       <span class="label">{{ stocks.year }}年</span>
       <button aria-label="次の年" @click="changeYear(1)">▶</button>
+    </div>
+
+    <RouterLink v-if="reachedWatches.length" to="/watch" class="card chance-card">
+      <p class="chance-title">🎯 目標価格に到達</p>
+      <p v-for="w in reachedWatches" :key="w.id" class="chance-row">
+        <span class="code">{{ w.code }}</span> {{ w.name }} —
+        {{ w.kind === 'buy' ? '買い' : '売り' }}目標 {{ Number(w.target_price).toLocaleString() }}円 /
+        現在 {{ w.current_price?.toLocaleString() }}円
+      </p>
+    </RouterLink>
+
+    <div v-if="settlementThisMonth.length" class="card settlement-card">
+      <p class="chance-title">📅 今月決算の銘柄</p>
+      <p class="settlement-row">
+        <template v-for="(s, i) in settlementThisMonth" :key="s.code">
+          <span v-if="i > 0">・</span><span class="code">{{ s.code }}</span>{{ s.name }}
+        </template>
+      </p>
     </div>
 
     <template v-if="stocks.summary">
@@ -109,6 +147,31 @@ onMounted(() => stocks.fetchSummary())
   font-size: 0.85rem;
   cursor: pointer;
   min-height: 44px;
+}
+
+.chance-card {
+  display: block;
+  text-decoration: none;
+  color: inherit;
+  border: 2px solid var(--color-gain);
+}
+
+.chance-title {
+  font-weight: 700;
+  margin-bottom: 6px;
+}
+
+.chance-row,
+.settlement-row {
+  font-size: 0.9rem;
+  padding: 2px 0;
+}
+
+.chance-row .code,
+.settlement-row .code {
+  color: var(--color-text-sub);
+  font-size: 0.8rem;
+  margin-right: 2px;
 }
 
 .total-card {

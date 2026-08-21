@@ -1,15 +1,33 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
 import { useStocksStore } from '../stores/stocks'
-import { accountLabel, dateLabel, pnlClass, signedYen, yen } from '../utils/format'
+import { ACCOUNT_TYPES, accountLabel, dateLabel, pnlClass, signedYen, yen } from '../utils/format'
+import { normalizeCode } from '../utils/stockNames'
 
 const stocks = useStocksStore()
 const loading = ref(true)
 
+// 絞り込み
+const query = ref('')
+const sideFilter = ref('') // '' | 'buy' | 'sell'
+const accountFilter = ref('')
+
+const filtered = computed(() => {
+  const q = query.value.trim()
+  const qCode = normalizeCode(q)
+  return stocks.trades.filter((t) => {
+    if (sideFilter.value && t.side !== sideFilter.value) return false
+    if (accountFilter.value && t.account_type !== accountFilter.value) return false
+    if (q && !t.name.includes(q) && !t.code.includes(qCode) && !(t.broker || '').includes(q))
+      return false
+    return true
+  })
+})
+
 // 月ごとにグループ化して表示
 const groups = computed(() => {
   const map = new Map()
-  for (const t of stocks.trades) {
+  for (const t of filtered.value) {
     const month = t.trade_date.slice(0, 7)
     if (!map.has(month)) map.set(month, [])
     map.get(month).push(t)
@@ -39,8 +57,34 @@ onMounted(async () => {
       <h1 class="page-title">取引履歴</h1>
       <RouterLink to="/import" class="btn btn-secondary btn-small">CSV取込</RouterLink>
     </div>
+    <div v-if="stocks.trades.length" class="card filter-card">
+      <input
+        v-model="query"
+        type="text"
+        placeholder="銘柄名・コード・証券会社で検索"
+        class="search"
+      />
+      <div class="filter-row">
+        <div class="chip-row">
+          <button type="button" class="chip chip-mini" :class="{ active: sideFilter === '' }" @click="sideFilter = ''">すべて</button>
+          <button type="button" class="chip chip-mini" :class="{ active: sideFilter === 'buy' }" @click="sideFilter = 'buy'">買付</button>
+          <button type="button" class="chip chip-mini" :class="{ active: sideFilter === 'sell' }" @click="sideFilter = 'sell'">売却</button>
+        </div>
+        <select v-model="accountFilter" class="account-select">
+          <option value="">全口座</option>
+          <option v-for="a in ACCOUNT_TYPES" :key="a.value" :value="a.value">{{ a.label }}</option>
+        </select>
+      </div>
+      <p v-if="query || sideFilter || accountFilter" class="filter-count">
+        {{ filtered.length }}件 / {{ stocks.trades.length }}件
+      </p>
+    </div>
+
     <p v-if="!loading && stocks.trades.length === 0" class="empty-message">
       まだ取引がありません。＋から登録するか、CSV取込で楽天証券の履歴を読み込めます。
+    </p>
+    <p v-if="!loading && stocks.trades.length > 0 && filtered.length === 0" class="empty-message">
+      条件に一致する取引がありません
     </p>
     <section v-for="group in groups" :key="group.month">
       <h2 class="month-label">{{ group.label }}</h2>
@@ -95,6 +139,40 @@ onMounted(async () => {
 
 .title-row a {
   text-decoration: none;
+}
+
+.filter-card {
+  padding: 12px;
+}
+
+.search {
+  margin-bottom: 8px;
+}
+
+.filter-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+.chip-mini {
+  min-height: 36px;
+  padding: 4px 12px;
+  font-size: 0.85rem;
+}
+
+.account-select {
+  width: auto;
+  min-height: 36px;
+  padding: 4px 8px;
+  font-size: 0.85rem;
+}
+
+.filter-count {
+  font-size: 0.75rem;
+  color: var(--color-text-sub);
+  margin-top: 8px;
 }
 
 .month-label {

@@ -72,8 +72,51 @@ class Dividend(models.Model):
         return f"{self.received_date} {self.code} ¥{self.amount}"
 
 
+class Watch(models.Model):
+    """「この価格まで来たら買い/売り」の目標価格メモ。"""
+
+    class Kind(models.TextChoices):
+        BUY = "buy", "買い目標"  # 現在値が目標以下になったら達成
+        SELL = "sell", "売り目標"  # 現在値が目標以上になったら達成
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="stock_watches"
+    )
+    code = models.CharField("銘柄コード", max_length=10)
+    name = models.CharField("銘柄名", max_length=100)
+    kind = models.CharField("種別", max_length=4, choices=Kind.choices, default=Kind.BUY)
+    target_price = models.DecimalField("目標価格", max_digits=14, decimal_places=4)
+    memo = models.CharField("メモ", max_length=200, blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-id"]
+
+    def __str__(self):
+        return f"{self.code} {self.get_kind_display()} {self.target_price}"
+
+
+class StockInfo(models.Model):
+    """銘柄ごとのユーザーメモ情報 (決算月など)。"""
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="stock_infos"
+    )
+    code = models.CharField("銘柄コード", max_length=10)
+    settlement_month = models.PositiveSmallIntegerField("決算月", null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["user", "code"], name="uniq_user_stock_info")
+        ]
+
+    def __str__(self):
+        return f"{self.code} 決算{self.settlement_month}月"
+
+
 class StockPrice(models.Model):
-    """保有銘柄の現在値 (手動入力)。保有一覧の評価損益に使う。"""
+    """保有銘柄の現在値 (株価取得 API または手動入力)。保有一覧の評価損益に使う。"""
 
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="stock_prices"
