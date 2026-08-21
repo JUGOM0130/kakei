@@ -63,8 +63,12 @@ async function onFileSelected(event) {
   if (!file) return
   const buffer = await file.arrayBuffer()
 
+  // ファイル種別は中身で判定する (スマホはファイル名や MIME が当てにならない)
+  const head = new TextDecoder('ascii').decode(new Uint8Array(buffer.slice(0, 5)))
+  const isPdf = head === '%PDF-'
+
   let rows
-  if (/\.pdf$/i.test(file.name) || file.type === 'application/pdf') {
+  if (isPdf) {
     parsing.value = true
     try {
       // pdfjs は重いので使うときだけ読み込む
@@ -201,12 +205,9 @@ async function submit() {
         </option>
       </select>
       <label for="imp-file">明細ファイル (CSV / PDF)</label>
-      <input
-        id="imp-file"
-        type="file"
-        accept=".csv,.pdf,text/csv,application/pdf"
-        @change="onFileSelected"
-      />
+      <!-- accept は指定しない: スマホのファイルピッカーが PDF/CSV を
+           グレーアウトすることがあるため。種別は中身で自動判定する -->
+      <input id="imp-file" type="file" @change="onFileSelected" />
       <p v-if="parsing" class="hint">PDF を解析中...</p>
       <p class="hint">
         VPASS / 楽天カード e-NAVI の明細 CSV・PDF に対応 (文字コード・列は自動判定)。
