@@ -306,6 +306,85 @@ class DividendApiTests(APITestCase):
         )
         self.assertEqual(res.status_code, 400)
 
+    def test_import_is_idempotent(self):
+        rows = [
+            {
+                "received_date": "2026-06-24",
+                "code": "9201",
+                "name": "日本航空",
+                "shares": 39,
+                "gross_amount": 1950,
+                "tax_national": 0,
+                "tax_local": 0,
+                "amount": 1950,
+                "memo": "NISA成長投資枠",
+            },
+            # 完全に同一内容の行が2つあるケース (両方とも別の受取として取り込む)
+            {
+                "received_date": "2026-06-26",
+                "code": "9104",
+                "name": "商船三井",
+                "shares": 2,
+                "gross_amount": 230,
+                "tax_national": 0,
+                "tax_local": 0,
+                "amount": 230,
+                "memo": "NISA成長投資枠",
+            },
+            {
+                "received_date": "2026-06-26",
+                "code": "9104",
+                "name": "商船三井",
+                "shares": 2,
+                "gross_amount": 230,
+                "tax_national": 0,
+                "tax_local": 0,
+                "amount": 230,
+                "memo": "NISA成長投資枠",
+            },
+        ]
+        res = self.client.post(
+            "/api/stocks/import/dividends/", {"dividends": rows}, format="json"
+        )
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.data["imported"], 3)
+        # 再取込 → 全件スキップ
+        res = self.client.post(
+            "/api/stocks/import/dividends/", {"dividends": rows}, format="json"
+        )
+        self.assertEqual(res.data["imported"], 0)
+        self.assertEqual(res.data["skipped_imported"], 3)
+        self.assertEqual(Dividend.objects.filter(user=self.user).count(), 3)
+
+    def test_import_skips_manually_entered_duplicates(self):
+        # 手入力済み (import_key=NULL、株数・税引前なし)。受取日+銘柄+税引後額で重複判定
+        Dividend.objects.create(
+            user=self.user,
+            received_date=date(2026, 5, 26),
+            code="7203",
+            name="トヨタ自動車",
+            amount=319,
+        )
+        rows = [
+            {
+                "received_date": "2026-05-26",
+                "code": "7203",
+                "name": "トヨタ自動車",
+                "shares": 8,
+                "gross_amount": 400,
+                "tax_national": 61,
+                "tax_local": 20,
+                "amount": 319,
+                "memo": "特定・一般",
+            }
+        ]
+        res = self.client.post(
+            "/api/stocks/import/dividends/", {"dividends": rows}, format="json"
+        )
+        self.assertEqual(res.data["imported"], 0)
+        self.assertEqual(res.data["skipped_manual"], 1)
+        self.assertEqual(Dividend.objects.filter(user=self.user).count(), 1)
+
     def test_partial_update(self):
         d = Dividend.objects.create(
             user=self.user,

@@ -70,10 +70,19 @@ class Dividend(models.Model):
     tax_local = models.PositiveIntegerField("源泉徴収額 地方税 (円)", null=True, blank=True)
     amount = models.PositiveIntegerField("受取額 (税引後・円)")
     memo = models.CharField("メモ", max_length=200, blank=True, default="")
+    # CSV 取込行の内容ハッシュ (同一ファイル再取込の冪等性用)。手入力は NULL
+    import_key = models.CharField("取込キー", max_length=64, null=True, blank=True, default=None)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         ordering = ["-received_date", "-id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["user", "import_key"],
+                name="uniq_user_dividend_import_key",
+                condition=models.Q(import_key__isnull=False),
+            )
+        ]
 
     def __str__(self):
         return f"{self.received_date} {self.code} ¥{self.amount}"

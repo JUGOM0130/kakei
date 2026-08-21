@@ -1,5 +1,6 @@
-// 楽天証券「取引履歴 (国内株式)」CSV (tradehistory(JP)_*.csv, Shift_JIS) の解析。
-// 列はヘッダー名で特定するので列順の変化に強い。
+// 楽天証券 CSV の解析。列はヘッダー名で特定するので列順の変化に強い。
+// - 取引履歴 (国内株式): tradehistory(JP)_*.csv (Shift_JIS)
+// - 配当金・分配金一覧: dividendlist_*.csv (UTF-8)
 
 import { normalizeCode } from './stockNames'
 
@@ -71,9 +72,9 @@ function mapAccount(v) {
 
 export async function readFileAsText(file) {
   const buf = await file.arrayBuffer()
-  // 楽天は Shift_JIS。UTF-8 で保存し直したファイルにも対応
+  // 取引履歴は Shift_JIS、配当金一覧は UTF-8。ヘッダー語が読めた方を採用する
   const sjis = new TextDecoder('shift_jis').decode(buf)
-  if (sjis.includes('約定日')) return sjis
+  if (sjis.includes('約定日') || sjis.includes('入金日')) return sjis
   return new TextDecoder('utf-8').decode(buf)
 }
 
@@ -134,4 +135,70 @@ export function parseRakutenTradeCsv(text) {
     })
   }
   return { trades, excluded }
+}
+
+// 国内配当の源泉徴収は所得税 15.315% + 住民税 5% (それぞれ切り捨て)。
+// 税額合計しか CSV にないので標準税率で内訳を復元し、合わなければ国税に寄せる
+function splitWithholding(gross, taxTotal) {
+  const national = Math.floor(gross * 0.15315)
+  const local = Math.floor(gross * 0.05)
+  if (national + local === taxTotal) return { tax_national: national, tax_local: local }
+  return { tax_national: taxTotal, tax_local: 0 }
+}
+
+export function parseRakutenDividendCsv(text) {
+  const rows = parseCsv(text)
+  const headerIdx = rows.findIndex(
+    (r) => r.some((c) => c.includes('入金日')) && r.some((c) => c.includes('銘柄コード')),
+  )
+  if (headerIdx < 0) {
+    throw new Error(
+      '楽天証券の配当金・分配金CSVではないようです (「入金日」「銘柄コード」列が見つかりません)。',
+    )
+  }
+  const header = rows[headerIdx]
+  const col = (label) => header.findIndex((h) => h.includes(label))
+  const idx = {
+    date: col('入金日'),
+    account: col('口座'),
+    code: col('銘柄コード'),
+    // 「銘柄」は「銘柄コード」にも部分一致するので除外して探す
+    name: header.findIndex((h) => h.includes('銘柄') && !h.includes('コード')),
+    currency: col('受取通貨'),
+    shares: col('数量'),
+    gross: col('税引前'),
+    tax: col('税額'),
+    amount: col('受取金額'),
+  }
+
+  const dividends = []
+  const excluded = []
+  for (const r of rows.slice(headerIdx + 1)) {
+    const label = `${r[idx.date]} ${r[idx.code]} ${r[idx.name]}`
+    const currency = (r[idx.currency] || '').trim()
+    if (currency && currency !== '円') {
+      excluded.push({ label, reason: `外貨建て (${currency}) は円換算できないため対象外` })
+      continue
+    }
+    const received_date = toDate(r[idx.date])
+    const gross = toNumber(r[idx.gross])
+    const taxTotal = toNumber(r[idx.tax])
+    const amount = toNumber(r[idx.amount])
+    if (!received_date || amount <= 0) {
+      excluded.push({ label, reason: '日付・受取金額を読み取れません' })
+      continue
+    }
+    const shares = toNumber(r[idx.shares])
+    dividends.push({
+      received_date,
+      code: normalizeCode(r[idx.code]),
+      name: (r[idx.name] || '').trim(),
+      shares: shares > 0 ? shares : null,
+      gross_amount: gross > 0 ? gross : null,
+      ...(gross > 0 ? splitWithholding(gross, taxTotal) : { tax_national: null, tax_local: null }),
+      amount,
+      memo: (r[idx.account] || '').trim(),
+    })
+  }
+  return { dividends, excluded }
 }

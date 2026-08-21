@@ -154,6 +154,82 @@ class ImportTradesView(APIView):
         )
 
 
+def _dividend_content_tuple(data):
+    """配当内容の正規化タプル。取込キーの基準。"""
+
+    def s(field):
+        v = data.get(field)
+        return "" if v is None else str(v)
+
+    return (
+        str(data["received_date"]),
+        data["code"],
+        s("shares"),
+        s("gross_amount"),
+        s("tax_national"),
+        s("tax_local"),
+        str(data["amount"]),
+    )
+
+
+class ImportDividendsView(APIView):
+    """証券会社の配当金・分配金一覧 CSV の一括取込 (冪等)。
+
+    行内容のハッシュを import_key として保存し、既取込行はスキップする。
+    手入力済みの配当 (import_key=NULL) は受取日・銘柄・税引後額の一致で
+    重複とみなしてスキップする (手入力には株数や税引前がないことが多いため)。
+    """
+
+    def post(self, request):
+        rows = request.data.get("dividends")
+        if not isinstance(rows, list) or not rows:
+            raise ValidationError({"dividends": "取込対象の行がありません。"})
+        serializer = DividendSerializer(data=rows, many=True)
+        serializer.is_valid(raise_exception=True)
+
+        existing_keys = set(
+            Dividend.objects.filter(user=request.user, import_key__isnull=False).values_list(
+                "import_key", flat=True
+            )
+        )
+        manual_counts = Counter(
+            (str(d.received_date), d.code, str(d.amount))
+            for d in Dividend.objects.filter(user=request.user, import_key__isnull=True)
+        )
+
+        occurrences = Counter()
+        manual_occurrences = Counter()
+        to_create = []
+        skipped_imported = 0
+        skipped_manual = 0
+        for data in serializer.validated_data:
+            content = _dividend_content_tuple(data)
+            n = occurrences[content]
+            occurrences[content] += 1
+            key = make_import_key(content, n)
+            if key in existing_keys:
+                skipped_imported += 1
+                continue
+            manual_key = (str(data["received_date"]), data["code"], str(data["amount"]))
+            m = manual_occurrences[manual_key]
+            manual_occurrences[manual_key] += 1
+            if m < manual_counts[manual_key]:
+                skipped_manual += 1
+                continue
+            to_create.append(Dividend(user=request.user, import_key=key, **data))
+
+        with transaction.atomic():
+            Dividend.objects.bulk_create(to_create)
+
+        return Response(
+            {
+                "imported": len(to_create),
+                "skipped_imported": skipped_imported,
+                "skipped_manual": skipped_manual,
+            }
+        )
+
+
 class PositionsView(APIView):
     """保有ポジション一覧 (移動平均法)。現在値が登録されていれば評価損益も返す。"""
 

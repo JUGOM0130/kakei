@@ -1,10 +1,16 @@
 <script setup>
 import { computed, ref } from 'vue'
 import api from '../api/client'
-import { parseRakutenTradeCsv, readFileAsText } from '../utils/rakutenCsv'
+import {
+  parseRakutenDividendCsv,
+  parseRakutenTradeCsv,
+  readFileAsText,
+} from '../utils/rakutenCsv'
 import { accountLabel, dateLabel, yen } from '../utils/format'
 
+const csvType = ref('') // 'trades' | 'dividends'
 const trades = ref([])
+const dividends = ref([])
 const excluded = ref([])
 const fileName = ref('')
 const parseError = ref('')
@@ -13,6 +19,7 @@ const importing = ref(false)
 
 const buyCount = computed(() => trades.value.filter((t) => t.side === 'buy').length)
 const sellCount = computed(() => trades.value.filter((t) => t.side === 'sell').length)
+const dividendTotal = computed(() => dividends.value.reduce((sum, d) => sum + d.amount, 0))
 
 async function onFile(e) {
   const file = e.target.files[0]
@@ -20,14 +27,29 @@ async function onFile(e) {
   if (!file) return
   parseError.value = ''
   result.value = null
+  csvType.value = ''
   trades.value = []
+  dividends.value = []
   excluded.value = []
   fileName.value = file.name
   try {
     const text = await readFileAsText(file)
-    const parsed = parseRakutenTradeCsv(text)
-    trades.value = parsed.trades
-    excluded.value = parsed.excluded
+    // ヘッダー語で取引履歴CSVか配当金CSVかを自動判別する
+    if (text.includes('約定日')) {
+      const parsed = parseRakutenTradeCsv(text)
+      csvType.value = 'trades'
+      trades.value = parsed.trades
+      excluded.value = parsed.excluded
+    } else if (text.includes('入金日')) {
+      const parsed = parseRakutenDividendCsv(text)
+      csvType.value = 'dividends'
+      dividends.value = parsed.dividends
+      excluded.value = parsed.excluded
+    } else {
+      throw new Error(
+        '楽天証券のCSVではないようです (「約定日」「入金日」列が見つかりません)。',
+      )
+    }
   } catch (err) {
     parseError.value = err.message || 'CSVの解析に失敗しました。'
   }
@@ -35,10 +57,14 @@ async function onFile(e) {
 
 async function doImport() {
   importing.value = true
+  const isTrades = csvType.value === 'trades'
   try {
-    const { data } = await api.post('/stocks/import/trades/', { trades: trades.value })
-    result.value = data
+    const { data } = isTrades
+      ? await api.post('/stocks/import/trades/', { trades: trades.value })
+      : await api.post('/stocks/import/dividends/', { dividends: dividends.value })
+    result.value = { ...data, type: csvType.value }
     trades.value = []
+    dividends.value = []
   } catch (e) {
     parseError.value =
       JSON.stringify(e.response?.data || '') !== '""'
@@ -52,12 +78,14 @@ async function doImport() {
 
 <template>
   <div class="page">
-    <h1 class="page-title">取引履歴CSV取込</h1>
+    <h1 class="page-title">CSV取込</h1>
 
     <div class="card">
       <p class="help">
-        楽天証券の「取引履歴 (国内株式)」CSV (tradehistory(JP)_～.csv) を選択してください。
-        同じファイルを何度取り込んでも二重登録されません (取込済み・手入力済みの取引は自動スキップ)。
+        楽天証券の「取引履歴 (国内株式)」CSV (tradehistory(JP)_～.csv) または
+        「配当金・分配金一覧」CSV (dividendlist_～.csv) を選択してください。
+        ファイル内容から自動判別します。
+        同じファイルを何度取り込んでも二重登録されません (取込済み・手入力済みの分は自動スキップ)。
       </p>
       <label class="btn file-btn">
         ファイルを選択
@@ -71,13 +99,15 @@ async function doImport() {
       <p class="result-main">{{ result.imported }}件を取り込みました</p>
       <p v-if="result.skipped_imported" class="sub">取込済みのためスキップ: {{ result.skipped_imported }}件</p>
       <p v-if="result.skipped_manual" class="sub">手入力済みのためスキップ: {{ result.skipped_manual }}件</p>
-      <RouterLink to="/trades" class="btn btn-secondary">履歴を見る</RouterLink>
+      <RouterLink :to="result.type === 'trades' ? '/trades' : '/dividends'" class="btn btn-secondary">
+        {{ result.type === 'trades' ? '履歴を見る' : '配当を見る' }}
+      </RouterLink>
     </div>
 
     <template v-if="trades.length">
       <div class="card">
         <p class="summary">
-          {{ trades.length }}件 (買付 {{ buyCount }} / 売却 {{ sellCount }})
+          取引履歴CSV: {{ trades.length }}件 (買付 {{ buyCount }} / 売却 {{ sellCount }})
           <template v-if="excluded.length"> ・対象外 {{ excluded.length }}件</template>
         </p>
         <button class="btn" :disabled="importing" @click="doImport">この内容で取り込む</button>
@@ -111,6 +141,49 @@ async function doImport() {
                 <span v-if="t.fee" class="fee">(手数料等 {{ yen(t.fee) }})</span>
               </td>
               <td class="nowrap">{{ accountLabel(t.account_type) }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </template>
+
+    <template v-if="dividends.length">
+      <div class="card">
+        <p class="summary">
+          配当金CSV: {{ dividends.length }}件 (税引後合計 {{ yen(dividendTotal) }})
+          <template v-if="excluded.length"> ・対象外 {{ excluded.length }}件</template>
+        </p>
+        <button class="btn" :disabled="importing" @click="doImport">この内容で取り込む</button>
+      </div>
+
+      <div class="card preview">
+        <table>
+          <thead>
+            <tr>
+              <th>入金日</th>
+              <th>銘柄</th>
+              <th class="num">株数</th>
+              <th class="num">税引前</th>
+              <th class="num">源泉徴収</th>
+              <th class="num">税引後</th>
+              <th>口座</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="(d, i) in dividends" :key="i">
+              <td class="nowrap">{{ d.received_date.slice(0, 4) }}年 {{ dateLabel(d.received_date) }}</td>
+              <td><span class="code">{{ d.code }}</span>{{ d.name }}</td>
+              <td class="num">{{ d.shares ? d.shares.toLocaleString() : '-' }}</td>
+              <td class="num nowrap">{{ d.gross_amount != null ? yen(d.gross_amount) : '-' }}</td>
+              <td class="num nowrap">
+                <template v-if="(d.tax_national || 0) + (d.tax_local || 0) > 0">
+                  {{ yen((d.tax_national || 0) + (d.tax_local || 0)) }}
+                  <span class="fee">(国 {{ yen(d.tax_national || 0) }} / 地方 {{ yen(d.tax_local || 0) }})</span>
+                </template>
+                <template v-else>-</template>
+              </td>
+              <td class="num nowrap">{{ yen(d.amount) }}</td>
+              <td class="nowrap">{{ d.memo }}</td>
             </tr>
           </tbody>
         </table>

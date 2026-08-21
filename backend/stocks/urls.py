@@ -10,6 +10,7 @@ router.register("watches", views.WatchViewSet, basename="stock-watch")
 
 urlpatterns = [
     path("import/trades/", views.ImportTradesView.as_view()),
+    path("import/dividends/", views.ImportDividendsView.as_view()),
     path("positions/", views.PositionsView.as_view()),
     path("prices/refresh/", views.PricesRefreshView.as_view()),
     path("prices/<str:code>/", views.PriceView.as_view()),
