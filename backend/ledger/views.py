@@ -594,18 +594,46 @@ class ImportSuggestView(APIView):
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
 
-        rules = MerchantRule.objects.filter(
-            user=request.user, merchant__in=data["merchants"]
-        ).select_related("category")
-        suggestions = {
-            rule.merchant: {
+        query_rows = data.get("rows")
+        if query_rows is None:
+            query_rows = [{"merchant": m, "amount": None} for m in data.get("merchants", [])]
+
+        merchants = {r["merchant"] for r in query_rows}
+        rules = list(
+            MerchantRule.objects.filter(user=request.user, merchant__in=merchants)
+            .select_related("category")
+            .order_by("-updated_at")
+        )
+
+        def rule_payload(rule):
+            return {
                 "category_id": rule.category_id,
                 "shared": rule.shared,
                 "payer_share_percent": rule.payer_share_percent,
                 "recurring_payment_id": rule.recurring_payment_id,
             }
-            for rule in rules
-        }
+
+        def resolve(merchant, amount):
+            """完全一致 (店名+金額) > 金額なしルール > 同店名の最新ルール"""
+            candidates = [r for r in rules if r.merchant == merchant]
+            if not candidates:
+                return None
+            if amount is not None:
+                exact = next((r for r in candidates if r.amount == amount), None)
+                if exact:
+                    return rule_payload(exact)
+            wildcard = next((r for r in candidates if r.amount is None), None)
+            if wildcard:
+                return rule_payload(wildcard)
+            return rule_payload(candidates[0])  # updated_at 降順の先頭
+
+        # 行ごとの解決結果 (入力 rows と同じ順序)
+        row_suggestions = [resolve(r["merchant"], r.get("amount")) for r in query_rows]
+        # 旧形式 (店名キー) も維持
+        suggestions = {}
+        for r, s in zip(query_rows, row_suggestions):
+            if s and r["merchant"] not in suggestions:
+                suggestions[r["merchant"]] = s
 
         existing_statement = False
         paid_recurring = {}
@@ -634,6 +662,7 @@ class ImportSuggestView(APIView):
         return Response(
             {
                 "suggestions": suggestions,
+                "row_suggestions": row_suggestions,
                 "existing_statement": existing_statement,
                 "paid_recurring": paid_recurring,
             }
@@ -694,9 +723,12 @@ class ImportTransactionsView(APIView):
                     # 定期支払に紐付けると、その月の固定費が支払済扱いになる
                     recurring_payment=row.get("recurring_payment_id"),
                 )
+                # 店名+金額の完全一致で学習 (同じ店名でも金額ごとに別カテゴリにできる。
+                # 例: ＥＴＣカード売上 1,190円 → 通勤ETC)
                 MerchantRule.objects.update_or_create(
                     user=request.user,
                     merchant=row["merchant"],
+                    amount=row["amount"],
                     defaults={
                         "category": row["category_id"],
                         "shared": row["shared"],

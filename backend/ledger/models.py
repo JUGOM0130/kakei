@@ -188,12 +188,18 @@ class Transaction(models.Model):
 
 
 class MerchantRule(models.Model):
-    """CSV取込の学習ルール: 店名 → カテゴリ/共有設定。取込のたびに上書き学習する。"""
+    """CSV取込の学習ルール: 店名 (+金額) → カテゴリ/共有設定。取込のたびに上書き学習する。
+
+    amount 付きのルールは「その店名かつその金額」の行だけに一致する
+    (例: ＥＴＣカード売上 の 1,190円 → 通勤ETC)。amount が null のルールは
+    金額を問わないワイルドカード。完全一致 > null > 同店名の最新 の順で解決する。
+    """
 
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="merchant_rules"
     )
     merchant = models.CharField("店名", max_length=200)
+    amount = models.PositiveIntegerField("金額", null=True, blank=True)
     category = models.ForeignKey(
         Category, on_delete=models.CASCADE, related_name="merchant_rules"
     )
@@ -213,11 +219,14 @@ class MerchantRule(models.Model):
 
     class Meta:
         constraints = [
-            models.UniqueConstraint(fields=["user", "merchant"], name="uniq_user_merchant")
+            models.UniqueConstraint(
+                fields=["user", "merchant", "amount"], name="uniq_user_merchant_amount"
+            )
         ]
 
     def __str__(self):
-        return f"{self.merchant} → {self.category.name}"
+        amount = f" ¥{self.amount}" if self.amount is not None else ""
+        return f"{self.merchant}{amount} → {self.category.name}"
 
 
 class Preference(models.Model):

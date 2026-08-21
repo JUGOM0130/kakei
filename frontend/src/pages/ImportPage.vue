@@ -23,6 +23,8 @@ const manualAmountCol = ref(2)
 const existingWarning = ref(false)
 const refundNote = ref(null) // {count, total, matched, unmatchedTotal}
 const paidRecurring = ref({}) // {rp_id: 'standalone'|'imported'} その月に支払記録済みの固定費
+const propagateNote = ref('')
+let propagateNoteTimer = null
 const recurringNote = ref(null) // {replaced: [names], blocked: [names]}
 const parentDate = ref(dayjs().format('YYYY-MM-DD'))
 const parentAmount = ref('')
@@ -164,16 +166,16 @@ async function buildPreview(mapping) {
   needManualMapping.value = false
   error.value = ''
 
-  // 学習済みルールの取得
+  // 学習済みルールの取得 (店名+金額で問い合わせ → 金額付きルールが優先で返る)
   const month = items[0].used_date.slice(0, 7)
-  let suggestions = {}
+  let rowSuggestions = []
   try {
     const { data } = await api.post('/import/suggest/', {
-      merchants: [...new Set(items.map((i) => i.merchant))],
+      rows: items.map((i) => ({ merchant: i.merchant, amount: i.amount })),
       payment_method_id: paymentMethodId.value,
       month,
     })
-    suggestions = data.suggestions
+    rowSuggestions = data.row_suggestions ?? []
     existingWarning.value = data.existing_statement
     paidRecurring.value = data.paid_recurring ?? {}
   } catch {
@@ -182,8 +184,8 @@ async function buildPreview(mapping) {
 
   const fallback = defaultCategoryId()
   const myShare = groupStore.me?.share_percent ?? 50
-  previewRows.value = items.map((item) => {
-    const rule = suggestions[item.merchant]
+  previewRows.value = items.map((item, i) => {
+    const rule = rowSuggestions[i]
     return {
       ...item,
       include: true,
@@ -290,6 +292,24 @@ function setAllShared(shared) {
   for (const row of previewRows.value) {
     if (row.refunded) continue
     row.shared = shared
+  }
+}
+
+// カテゴリ変更を「同じ店名・同じ金額」の行に一括適用する
+// (例: ＥＴＣカード売上 1,190円 × 16行 → 1回の変更で全行が通勤ETCに)
+function propagateCategory(row) {
+  let count = 0
+  for (const other of previewRows.value) {
+    if (other === row) continue
+    if (other.merchant === row.merchant && other.amount === row.amount) {
+      other.category_id = row.category_id
+      count++
+    }
+  }
+  if (count > 0) {
+    propagateNote.value = `同じ店名・同額の ${count} 行にも適用しました`
+    clearTimeout(propagateNoteTimer)
+    propagateNoteTimer = setTimeout(() => (propagateNote.value = ''), 2500)
   }
 }
 
@@ -455,6 +475,10 @@ async function submit() {
           明細 {{ previewRows.length }}件
           <span v-if="skippedCount" class="hint-inline">(読み飛ばし {{ skippedCount }}件)</span>
         </div>
+        <p class="hint">
+          カテゴリを変えると同じ店名・同額の行にも一括適用され、次回の取込から自動で同じ設定になります。
+        </p>
+        <p v-if="propagateNote" class="propagate-note">✓ {{ propagateNote }}</p>
         <div v-if="hasGroup" class="bulk-row">
           <button class="btn btn-secondary btn-small" @click="setAllShared(true)">
             👥 全行を折半にする
@@ -472,7 +496,7 @@ async function submit() {
             </div>
             <div class="sub">{{ r.used_date }}</div>
             <div class="controls">
-              <select v-model="r.category_id" class="cat-select">
+              <select v-model="r.category_id" class="cat-select" @change="propagateCategory(r)">
                 <option v-for="c in expenseCategories" :key="c.id" :value="c.id">
                   {{ c.name }}
                 </option>
@@ -642,6 +666,13 @@ async function submit() {
   display: flex;
   gap: 8px;
   margin-bottom: 8px;
+}
+
+.propagate-note {
+  color: var(--color-primary);
+  font-size: 0.8rem;
+  font-weight: 600;
+  margin-bottom: 6px;
 }
 
 .refund-badge {

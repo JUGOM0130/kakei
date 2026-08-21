@@ -614,6 +614,58 @@ class ImportTests(BaseTestCase):
         )
         self.assertEqual(linked.count(), 1)  # 増えていない
 
+    def test_amount_specific_rules(self):
+        # 通勤ETC カテゴリを作成し、同じ店名でも金額別に学習できることを確認
+        commute = Category.objects.create(
+            user=self.alice, name="通勤ETC", type=Category.Type.EXPENSE
+        )
+        transport = Category.objects.get(user=self.alice, name="交通")
+        payload = {
+            "payment_method_id": self.card["id"],
+            "parent": {
+                "date": "2026-08-27",
+                "amount": 5000,
+                "category_id": self.alice_other.id,
+            },
+            "rows": [
+                {
+                    "merchant": "ＥＴＣカード売上",
+                    "used_date": "2026-08-03",
+                    "amount": 1190,
+                    "category_id": commute.id,
+                    "shared": False,
+                },
+                {
+                    "merchant": "ＥＴＣカード売上",
+                    "used_date": "2026-08-05",
+                    "amount": 2500,
+                    "category_id": transport.id,
+                    "shared": False,
+                },
+            ],
+        }
+        res = self.client.post("/api/import/transactions/", payload, format="json")
+        self.assertEqual(res.status_code, 201)
+
+        res = self.client.post(
+            "/api/import/suggest/",
+            {
+                "rows": [
+                    {"merchant": "ＥＴＣカード売上", "amount": 1190},
+                    {"merchant": "ＥＴＣカード売上", "amount": 2500},
+                    {"merchant": "ＥＴＣカード売上", "amount": 990},  # 未知の金額
+                    {"merchant": "未知の店", "amount": 100},
+                ]
+            },
+            format="json",
+        )
+        sug = res.json()["row_suggestions"]
+        self.assertEqual(sug[0]["category_id"], commute.id)  # 1190 → 通勤ETC
+        self.assertEqual(sug[1]["category_id"], transport.id)  # 2500 → 交通
+        # 未知の金額は同店名の最新ルールにフォールバック (2500 の方が後に学習)
+        self.assertEqual(sug[2]["category_id"], transport.id)
+        self.assertIsNone(sug[3])
+
     def test_items_share_bulk(self):
         parent = self.client.post(
             "/api/transactions/",

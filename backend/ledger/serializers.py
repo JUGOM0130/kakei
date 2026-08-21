@@ -297,9 +297,19 @@ class ImportSerializer(serializers.Serializer):
         return attrs
 
 
+class ImportSuggestRowSerializer(serializers.Serializer):
+    merchant = serializers.CharField(max_length=200)
+    amount = serializers.IntegerField(min_value=1, required=False, allow_null=True)
+
+
 class ImportSuggestSerializer(serializers.Serializer):
+    # 店名+金額のペアで問い合わせる (金額付きルールの完全一致判定のため)
+    rows = ImportSuggestRowSerializer(many=True, required=False)
     merchants = serializers.ListField(
-        child=serializers.CharField(max_length=200), allow_empty=True, max_length=1000
+        child=serializers.CharField(max_length=200),
+        allow_empty=True,
+        max_length=1000,
+        required=False,
     )
     payment_method_id = UserPaymentMethodField(required=False, allow_null=True)
     month = serializers.RegexField(r"^\d{4}-(0[1-9]|1[0-2])$", required=False)
