@@ -11,9 +11,10 @@ Environment=DJANGO_SETTINGS_MODULE=config.settings.prod
 # Django の reverse()/リダイレクト/STATIC_URL に自動で前置される
 Environment=SCRIPT_NAME=/kakei
 EnvironmentFile=/opt/kakei/backend/.env
-# AlmaLinux (SELinux) では unix ソケットより 127.0.0.1 TCP の方が扱いやすい
+# AlmaLinux (SELinux) では unix ソケットより 127.0.0.1 TCP の方が扱いやすい。
+# 8001 はこの VPS の既存アプリが使用中のため 8011 を使う
 ExecStart=/opt/kakei/backend/.venv/bin/gunicorn config.wsgi:application \
-  --workers 2 --bind 127.0.0.1:8001 --timeout 60
+  --workers 2 --bind 127.0.0.1:8011 --timeout 60
 Restart=on-failure
 
 [Install]
