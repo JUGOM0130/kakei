@@ -35,9 +35,12 @@ onMounted(async () => {
 
 <template>
   <div class="page">
-    <h1 class="page-title">取引履歴</h1>
+    <div class="title-row">
+      <h1 class="page-title">取引履歴</h1>
+      <RouterLink to="/import" class="btn btn-secondary btn-small">CSV取込</RouterLink>
+    </div>
     <p v-if="!loading && stocks.trades.length === 0" class="empty-message">
-      まだ取引がありません。＋から登録してください。
+      まだ取引がありません。＋から登録するか、CSV取込で楽天証券の履歴を読み込めます。
     </p>
     <section v-for="group in groups" :key="group.month">
       <h2 class="month-label">{{ group.label }}</h2>
@@ -79,6 +82,21 @@ onMounted(async () => {
 </template>
 
 <style scoped>
+.title-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.title-row .page-title {
+  margin-bottom: 0;
+}
+
+.title-row a {
+  text-decoration: none;
+}
+
 .month-label {
   font-size: 0.9rem;
   color: var(--color-text-sub);

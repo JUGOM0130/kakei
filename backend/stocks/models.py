@@ -34,10 +34,19 @@ class Trade(models.Model):
     )
     broker = models.CharField("証券会社", max_length=50, blank=True, default="")
     memo = models.CharField("メモ", max_length=200, blank=True, default="")
+    # CSV 取込行の内容ハッシュ (同一ファイル再取込の冪等性用)。手入力は NULL
+    import_key = models.CharField("取込キー", max_length=64, null=True, blank=True, default=None)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         ordering = ["-trade_date", "-id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["user", "import_key"],
+                name="uniq_user_trade_import_key",
+                condition=models.Q(import_key__isnull=False),
+            )
+        ]
 
     def __str__(self):
         return f"{self.trade_date} {self.get_side_display()} {self.code} {self.quantity}株"

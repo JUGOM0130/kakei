@@ -12,6 +12,7 @@ const router = createRouter({
     { path: '/trades/:id/edit', name: 'trade-edit', component: () => import('../pages/TradeFormPage.vue'), props: true },
     { path: '/positions', name: 'positions', component: () => import('../pages/PositionsPage.vue') },
     { path: '/dividends', name: 'dividends', component: () => import('../pages/DividendsPage.vue') },
+    { path: '/import', name: 'import', component: () => import('../pages/ImportPage.vue') },
   ],
 })
 

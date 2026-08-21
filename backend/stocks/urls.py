@@ -8,6 +8,7 @@ router.register("trades", views.TradeViewSet, basename="stock-trade")
 router.register("dividends", views.DividendViewSet, basename="stock-dividend")
 
 urlpatterns = [
+    path("import/trades/", views.ImportTradesView.as_view()),
     path("positions/", views.PositionsView.as_view()),
     path("prices/<str:code>/", views.PriceView.as_view()),
     path("summary/", views.SummaryView.as_view()),

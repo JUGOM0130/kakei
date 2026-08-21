@@ -25,6 +25,7 @@ Vue 3 + Django REST Framework の家計管理 Web アプリ。スマホブラウ
 - **銘柄名の自動補完**: 銘柄コードを入力すると JPX 上場銘柄一覧 (約4,400銘柄、ETF・REIT・285A 等の英字入りコード含む) から銘柄名を自動入力。全角入力も正規化。証券会社・口座区分は過去取引から補完。マスタの更新は `kabu/scripts/update-stock-names.mjs` (README 内コメント参照)
 - **実現損益の自動計算**: 移動平均法 (買付手数料込み)。売却行に損益を表示し、(銘柄コード, 口座区分) ごとに平均取得単価を管理
 - **保有一覧**: 保有株数・平均取得単価・取得額。現在値を手動入力すると評価額・評価損益を表示
+- **取引履歴CSV取込 (楽天証券)**: 「取引履歴 (国内株式)」CSV (tradehistory(JP)_～.csv、Shift_JIS) をブラウザ内で解析し一括登録 (履歴画面 →「CSV取込」)。買付・積立・売付の現物取引に対応 (積立はメモに記録)、手数料・税金等・諸費用は合算。**冪等**: 行内容のハッシュを `import_key` として保存し、同じファイルの再取込や手入力済みの同内容取引は自動スキップ
 - **配当金記録**: 受取日・銘柄・税引後受取額
 - **年間ダッシュボード**: 実現損益+配当の年間トータル、月別推移 (積み上げ棒グラフ)、銘柄別内訳。年送りで過去年も参照可
 - データはユーザーごとに分離 (KAKEI のグループ共有とは無関係)
@@ -194,6 +195,7 @@ curl http://v133-18-242-137.vir.kagoya.net/kakei/api/auth/me/   # 401 JSON
 | POST/DELETE | `/api/settlements/` `{id}/` | 月次精算の記録 / 取消 |
 | GET | `/api/summary/monthly/?month=YYYY-MM` | 月次サマリー + 最低必要額 + 共有精算 + 支払方法別合計 |
 | CRUD | `/api/stocks/trades/` | (KABU) 株取引 (`?year=&code=`)。売却行は `realized_pnl` 付き |
+| POST | `/api/stocks/import/trades/` | (KABU) 取引の一括取込 (冪等、import_key + 手入力重複スキップ) |
 | CRUD | `/api/stocks/dividends/` | (KABU) 配当金 (`?year=`) |
 | GET | `/api/stocks/positions/` | (KABU) 保有ポジション (移動平均) + 評価損益 |
 | PUT/DELETE | `/api/stocks/prices/{code}/` | (KABU) 銘柄の現在値を手動登録/削除 |

@@ -127,6 +127,73 @@ class SummaryApiTests(APITestCase):
         sell_row = next(r for r in res.data if r["side"] == "sell")
         self.assertEqual(sell_row["realized_pnl"], 900)
 
+    def test_import_is_idempotent(self):
+        rows = [
+            {
+                "trade_date": "2026-01-10",
+                "code": "7203",
+                "name": "トヨタ自動車",
+                "side": "buy",
+                "quantity": 100,
+                "price": "2591.0",
+                "fee": 0,
+                "account_type": "tokutei",
+                "broker": "楽天証券",
+            },
+            # 完全に同一内容の行が2つあるケース (両方とも別取引として取り込む)
+            {
+                "trade_date": "2026-02-01",
+                "code": "9432",
+                "name": "NTT",
+                "side": "buy",
+                "quantity": 100,
+                "price": "146.6",
+                "fee": 0,
+                "account_type": "nisa_growth",
+                "broker": "楽天証券",
+            },
+            {
+                "trade_date": "2026-02-01",
+                "code": "9432",
+                "name": "NTT",
+                "side": "buy",
+                "quantity": 100,
+                "price": "146.6",
+                "fee": 0,
+                "account_type": "nisa_growth",
+                "broker": "楽天証券",
+            },
+        ]
+        res = self.client.post("/api/stocks/import/trades/", {"trades": rows}, format="json")
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.data["imported"], 3)
+        # 再取込 → 全件スキップ
+        res = self.client.post("/api/stocks/import/trades/", {"trades": rows}, format="json")
+        self.assertEqual(res.data["imported"], 0)
+        self.assertEqual(res.data["skipped_imported"], 3)
+        self.assertEqual(Trade.objects.filter(user=self.user).count(), 3)
+
+    def test_import_skips_manually_entered_duplicates(self):
+        # 手入力済み (import_key=NULL)。単価は 2591.0000 で保存される
+        make_trade(self.user, trade_date=date(2026, 1, 10), price=Decimal("2591"))
+        rows = [
+            {
+                "trade_date": "2026-01-10",
+                "code": "7203",
+                "name": "トヨタ",
+                "side": "buy",
+                "quantity": 100,
+                "price": "2591.0",
+                "fee": 0,
+                "account_type": "tokutei",
+                "broker": "楽天証券",
+            }
+        ]
+        res = self.client.post("/api/stocks/import/trades/", {"trades": rows}, format="json")
+        self.assertEqual(res.data["imported"], 0)
+        self.assertEqual(res.data["skipped_manual"], 1)
+        self.assertEqual(Trade.objects.filter(user=self.user).count(), 1)
+
     def test_positions_with_price(self):
         make_trade(self.user, quantity=200, price=Decimal("1000"), fee=0)
         res = self.client.put("/api/stocks/prices/7203/", {"price": "1250"})

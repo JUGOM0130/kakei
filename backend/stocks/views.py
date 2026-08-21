@@ -1,7 +1,9 @@
-from collections import defaultdict
+import hashlib
+from collections import Counter, defaultdict
 from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
 
+from django.db import transaction
 from rest_framework import viewsets
 from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
@@ -59,6 +61,91 @@ class DividendViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         serializer.save(user=self.request.user)
+
+
+def _trade_content_tuple(data):
+    """取引内容の正規化タプル。取込キーと手入力重複チェックの基準。"""
+    # Decimal('2591.0') と Decimal('2591') を同一視する
+    price = format(Decimal(data["price"]).normalize(), "f")
+    return (
+        str(data["trade_date"]),
+        data["code"],
+        data["side"],
+        str(data["quantity"]),
+        price,
+        str(data.get("fee", 0)),
+        data["account_type"],
+    )
+
+
+def make_import_key(content, occurrence):
+    """同一内容の行がファイル内に複数あっても衝突しないよう出現順を付けてハッシュ化。"""
+    raw = "|".join(content) + f"#{occurrence}"
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:64]
+
+
+class ImportTradesView(APIView):
+    """証券会社の取引履歴 CSV の一括取込 (冪等)。
+
+    行内容のハッシュを import_key として保存し、既取込行はスキップする。
+    手入力済みの同内容取引 (import_key=NULL) ともマッチさせて二重登録を防ぐ。
+    """
+
+    def post(self, request):
+        rows = request.data.get("trades")
+        if not isinstance(rows, list) or not rows:
+            raise ValidationError({"trades": "取込対象の行がありません。"})
+        serializer = TradeSerializer(data=rows, many=True)
+        serializer.is_valid(raise_exception=True)
+
+        existing_keys = set(
+            Trade.objects.filter(user=request.user, import_key__isnull=False).values_list(
+                "import_key", flat=True
+            )
+        )
+        # 手入力取引の内容タプル別件数 (同内容の先頭 n 件は手入力済みとみなしてスキップ)
+        manual_counts = Counter(
+            _trade_content_tuple(
+                {
+                    "trade_date": t.trade_date,
+                    "code": t.code,
+                    "side": t.side,
+                    "quantity": t.quantity,
+                    "price": t.price,
+                    "fee": t.fee,
+                    "account_type": t.account_type,
+                }
+            )
+            for t in Trade.objects.filter(user=request.user, import_key__isnull=True)
+        )
+
+        occurrences = Counter()
+        to_create = []
+        skipped_imported = 0
+        skipped_manual = 0
+        for data in serializer.validated_data:
+            content = _trade_content_tuple(data)
+            n = occurrences[content]
+            occurrences[content] += 1
+            key = make_import_key(content, n)
+            if key in existing_keys:
+                skipped_imported += 1
+                continue
+            if n < manual_counts[content]:
+                skipped_manual += 1
+                continue
+            to_create.append(Trade(user=request.user, import_key=key, **data))
+
+        with transaction.atomic():
+            Trade.objects.bulk_create(to_create)
+
+        return Response(
+            {
+                "imported": len(to_create),
+                "skipped_imported": skipped_imported,
+                "skipped_manual": skipped_manual,
+            }
+        )
 
 
 class PositionsView(APIView):
