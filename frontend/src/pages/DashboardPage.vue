@@ -48,6 +48,8 @@ async function onUnsettle(id) {
         :income="ledger.summary.income_total"
         :expense="ledger.summary.expense_total"
         :balance="ledger.summary.balance"
+        :month="ledger.summary.month"
+        :income-month="ledger.summary.income_month"
       />
       <SharedCard
         v-if="ledger.summary.shared.enabled"

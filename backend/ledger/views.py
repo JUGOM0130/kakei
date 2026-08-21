@@ -2,7 +2,7 @@ import calendar
 import re
 import secrets
 from collections import defaultdict
-from datetime import date
+from datetime import date, timedelta
 
 from django.db import IntegrityError, transaction
 from django.db.models import Q, Sum
@@ -23,6 +23,7 @@ from .models import (
     GroupMember,
     MerchantRule,
     PaymentMethod,
+    Preference,
     RecurringPayment,
     Settlement,
     Transaction,
@@ -36,6 +37,7 @@ from .serializers import (
     ImportSerializer,
     ImportSuggestSerializer,
     PaymentMethodSerializer,
+    PreferenceSerializer,
     PaySerializer,
     RecurringPaymentSerializer,
     SettleSerializer,
@@ -332,6 +334,14 @@ class MonthlySummaryView(APIView):
             else:
                 top_txs.append(tx)
 
+        # 「前月の給料で当月をやりくり」設定: 収入は前月分を表示・収支計算に使う
+        pref = Preference.objects.filter(user=user).first()
+        use_prev_income = pref.use_prev_month_income if pref else False
+        income_month = month
+        if use_prev_income:
+            prev_day = first - timedelta(days=1)
+            income_month = f"{prev_day.year}-{prev_day.month:02d}"
+
         income_total = expense_total = 0
         category_totals = {}
         method_totals = {}
@@ -351,6 +361,8 @@ class MonthlySummaryView(APIView):
 
         for tx in top_txs:
             if tx.category.type == Category.Type.INCOME:
+                if use_prev_income:
+                    continue  # 当月の収入は翌月のやりくり原資として扱う
                 income_total += tx.amount
             else:
                 expense_total += tx.amount
@@ -382,6 +394,31 @@ class MonthlySummaryView(APIView):
                 income_by_category.append(entry)
             else:
                 expense_by_category.append(entry)
+
+        if use_prev_income:
+            # 前月の収入をやりくり原資として集計
+            prev_first, prev_last = month_range(income_month)
+            prev_rows = (
+                Transaction.objects.filter(
+                    user=user,
+                    parent__isnull=True,
+                    date__range=(prev_first, prev_last),
+                    category__type=Category.Type.INCOME,
+                )
+                .values("category_id", "category__name", "category__color")
+                .annotate(total=Sum("amount"))
+                .order_by("-total")
+            )
+            income_by_category = [
+                {
+                    "category_id": row["category_id"],
+                    "name": row["category__name"],
+                    "color": row["category__color"],
+                    "total": row["total"],
+                }
+                for row in prev_rows
+            ]
+            income_total = sum(row["total"] for row in prev_rows)
 
         payment_methods = sorted(method_totals.values(), key=lambda m: -m["total"])
 
@@ -462,6 +499,7 @@ class MonthlySummaryView(APIView):
         return Response(
             {
                 "month": month,
+                "income_month": income_month,
                 "income_total": income_total,
                 "expense_total": expense_total,
                 "balance": income_total - expense_total,
@@ -613,6 +651,21 @@ class ImportTransactionsView(APIView):
             TransactionSerializer(parent, context={"request": request}).data,
             status=status.HTTP_201_CREATED,
         )
+
+
+class PreferenceView(APIView):
+    """ユーザー設定 (前月収入でやりくり など)"""
+
+    def get(self, request):
+        pref, _ = Preference.objects.get_or_create(user=request.user)
+        return Response(PreferenceSerializer(pref).data)
+
+    def put(self, request):
+        pref, _ = Preference.objects.get_or_create(user=request.user)
+        serializer = PreferenceSerializer(pref, data=request.data)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)
 
 
 class BalanceView(APIView):

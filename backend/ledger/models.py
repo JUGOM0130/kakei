@@ -220,6 +220,20 @@ class MerchantRule(models.Model):
         return f"{self.merchant} → {self.category.name}"
 
 
+class Preference(models.Model):
+    """ユーザーごとの表示・集計設定"""
+
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="preference"
+    )
+    # 当月のやりくりを前月の収入 (給料) で行う: ホームの収入・収支を前月収入ベースで表示
+    use_prev_month_income = models.BooleanField("前月収入でやりくり", default=False)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"{self.user.username} prev_income={self.use_prev_month_income}"
+
+
 class AccountBalance(models.Model):
     """基準となる口座残高。想定残高 = amount + as_of_date より後の収支累計 ± 精算。"""
 

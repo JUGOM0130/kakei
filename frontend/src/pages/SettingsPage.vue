@@ -27,20 +27,30 @@ const balanceDate = ref(new Date().toISOString().slice(0, 10))
 const balanceSaved = ref(false)
 const balanceError = ref('')
 
+const usePrevIncome = ref(false)
+
 const partner = computed(() => groupStore.partner)
 
 onMounted(async () => {
-  const [, , balanceRes] = await Promise.all([
+  const [, , balanceRes, prefRes] = await Promise.all([
     groupStore.fetch(),
     ledger.fetchPaymentMethods(true),
     api.get('/balance/'),
+    api.get('/preferences/'),
   ])
   if (groupStore.me) myShare.value = groupStore.me.share_percent
   if (balanceRes.data.balance) {
     balanceAmount.value = String(balanceRes.data.balance.amount)
     balanceDate.value = balanceRes.data.balance.as_of_date
   }
+  usePrevIncome.value = prefRes.data.use_prev_month_income
 })
+
+async function togglePrevIncome() {
+  usePrevIncome.value = !usePrevIncome.value
+  await api.put('/preferences/', { use_prev_month_income: usePrevIncome.value })
+  ledger.summary = null // 次回表示時に再取得
+}
 
 async function saveBalance() {
   balanceError.value = ''
@@ -208,6 +218,27 @@ async function logout() {
       </template>
     </div>
 
+    <!-- やりくり設定 -->
+    <h2 class="section-label">やりくり設定</h2>
+    <div class="card">
+      <div class="pref-row">
+        <div>
+          <div class="pref-title">前月の収入でやりくりする</div>
+          <p class="hint">
+            オンにすると、ホームの「収入」と「収支」が前月の収入 (給料) を基準になります。例: 8月の画面では「7月分の収入 −
+            8月の支出」。
+          </p>
+        </div>
+        <button
+          class="chip"
+          :class="{ active: usePrevIncome }"
+          @click="togglePrevIncome"
+        >
+          {{ usePrevIncome ? 'オン' : 'オフ' }}
+        </button>
+      </div>
+    </div>
+
     <!-- 口座残高 -->
     <h2 class="section-label">口座残高</h2>
     <div class="card">
@@ -364,5 +395,19 @@ async function logout() {
 
 .save-balance {
   margin-top: 12px;
+}
+
+.pref-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.pref-row > div:first-child {
+  flex: 1;
+}
+
+.pref-title {
+  font-weight: 600;
 }
 </style>

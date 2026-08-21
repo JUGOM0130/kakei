@@ -6,6 +6,7 @@ from .models import (
     Category,
     GroupMember,
     PaymentMethod,
+    Preference,
     RecurringPayment,
     Transaction,
 )
@@ -234,6 +235,12 @@ class RecurringPaymentSerializer(serializers.ModelSerializer):
                     {"is_shared": "グループに参加していないため共有できません。"}
                 )
         return attrs
+
+
+class PreferenceSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Preference
+        fields = ["use_prev_month_income"]
 
 
 class AccountBalanceSerializer(serializers.ModelSerializer):

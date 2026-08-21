@@ -629,6 +629,46 @@ class OcrTests(BaseTestCase):
         self.assertEqual(res.status_code, 400)
 
 
+class PreferenceTests(BaseTestCase):
+    def test_prev_month_income_mode(self):
+        Transaction.objects.create(
+            user=self.alice, category=self.alice_salary, amount=300000, date="2026-07-25"
+        )
+        Transaction.objects.create(
+            user=self.alice, category=self.alice_salary, amount=310000, date="2026-08-25"
+        )
+        Transaction.objects.create(
+            user=self.alice, category=self.alice_food, amount=50000, date="2026-08-05"
+        )
+        self.client.force_login(self.alice)
+
+        # デフォルト: 当月収入ベース
+        data = self.client.get("/api/summary/monthly/", {"month": "2026-08"}).json()
+        self.assertEqual(data["income_month"], "2026-08")
+        self.assertEqual(data["income_total"], 310000)
+        self.assertEqual(data["balance"], 260000)
+
+        # オン: 前月収入ベース
+        res = self.client.put(
+            "/api/preferences/", {"use_prev_month_income": True}, format="json"
+        )
+        self.assertEqual(res.status_code, 200)
+        data = self.client.get("/api/summary/monthly/", {"month": "2026-08"}).json()
+        self.assertEqual(data["income_month"], "2026-07")
+        self.assertEqual(data["income_total"], 300000)
+        self.assertEqual(data["balance"], 250000)  # 7月収入 − 8月支出
+        self.assertEqual(data["expense_total"], 50000)
+        self.assertEqual(data["income_by_category"][0]["total"], 300000)
+
+        # 1月表示では前年12月が原資になる
+        Transaction.objects.create(
+            user=self.alice, category=self.alice_salary, amount=999, date="2026-12-25"
+        )
+        data = self.client.get("/api/summary/monthly/", {"month": "2027-01"}).json()
+        self.assertEqual(data["income_month"], "2026-12")
+        self.assertEqual(data["income_total"], 999)
+
+
 class BalanceTests(BaseTestCase):
     def test_balance_forecast(self):
         self.client.force_login(self.alice)

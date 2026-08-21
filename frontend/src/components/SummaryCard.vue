@@ -1,17 +1,26 @@
 <script setup>
+import { computed } from 'vue'
 import { yen } from '../utils/format'
 
-defineProps({
+const props = defineProps({
   income: { type: Number, default: 0 },
   expense: { type: Number, default: 0 },
   balance: { type: Number, default: 0 },
+  month: { type: String, default: '' },
+  incomeMonth: { type: String, default: '' },
+})
+
+// 「前月収入でやりくり」設定時は収入の対象月を明示する
+const incomeLabel = computed(() => {
+  if (!props.incomeMonth || props.incomeMonth === props.month) return '収入'
+  return `収入 (${Number(props.incomeMonth.slice(5))}月分)`
 })
 </script>
 
 <template>
   <div class="card summary">
     <div class="col">
-      <div class="label">収入</div>
+      <div class="label">{{ incomeLabel }}</div>
       <div class="value amount-income">{{ yen(income) }}</div>
     </div>
     <div class="col">
