@@ -151,6 +151,16 @@ async function updateItemShare(item, value) {
   await loadTransaction()
 }
 
+// 登録後に内訳行のカテゴリを変更する
+async function updateItemCategory(item, value) {
+  try {
+    await api.patch(`/transactions/${item.id}/`, { category_id: Number(value) })
+    await loadTransaction()
+  } catch (e) {
+    alert(e.response?.data?.detail || 'カテゴリの変更に失敗しました。')
+  }
+}
+
 async function submit(goBreakdown = false) {
   error.value = ''
   if (!categoryId.value) {
@@ -341,8 +351,18 @@ async function remove() {
       <div v-for="item in items" :key="item.id" class="item-row">
         <span class="chip-dot" :style="{ background: item.category.color }"></span>
         <div class="item-info">
-          <div class="item-name">{{ item.category.name }}</div>
           <div v-if="item.memo" class="item-memo">{{ item.memo }}</div>
+          <div class="item-controls">
+            <select
+              class="item-cat-select"
+              :value="item.category.id"
+              @change="updateItemCategory(item, $event.target.value)"
+            >
+              <option v-for="c in filteredCategories" :key="c.id" :value="c.id">
+                {{ c.name }}
+              </option>
+            </select>
+          </div>
           <div v-if="hasGroup" class="item-controls">
             <button
               class="chip chip-mini"
@@ -523,6 +543,13 @@ async function remove() {
   align-items: center;
   gap: 6px;
   margin-top: 4px;
+}
+
+.item-cat-select {
+  width: auto;
+  min-height: 34px;
+  padding: 3px 8px;
+  font-size: 0.85rem;
 }
 
 .chip-mini {
