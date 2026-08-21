@@ -41,6 +41,10 @@ export const useStocksStore = defineStore('stocks', {
       await api.post('/stocks/dividends/', payload)
       await this.fetchDividends()
     },
+    async updateDividend(id, payload) {
+      await api.patch(`/stocks/dividends/${id}/`, payload)
+      await this.fetchDividends()
+    },
     async deleteDividend(id) {
       await api.delete(`/stocks/dividends/${id}/`)
       this.dividends = this.dividends.filter((d) => d.id !== id)

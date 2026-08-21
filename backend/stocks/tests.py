@@ -250,3 +250,77 @@ class SummaryApiTests(APITestCase):
         self.assertEqual(row["cost"], 200000)
         self.assertEqual(row["market_value"], 250000)
         self.assertEqual(row["unrealized_pnl"], 50000)
+
+
+class DividendApiTests(APITestCase):
+    def setUp(self):
+        self.user = get_user_model().objects.create_user("taro", password="pass12345")
+        self.client.force_authenticate(self.user)
+
+    def test_create_with_tax_breakdown_autocomputes_amount(self):
+        res = self.client.post(
+            "/api/stocks/dividends/",
+            {
+                "received_date": "2026-06-01",
+                "code": "7203",
+                "name": "トヨタ",
+                "shares": 100,
+                "gross_amount": 5000,
+                "tax_national": 765,
+                "tax_local": 250,
+            },
+            format="json",
+        )
+        self.assertEqual(res.status_code, 201)
+        self.assertEqual(res.data["amount"], 3985)  # 5000 - 765 - 250
+
+    def test_create_amount_only_still_works(self):
+        res = self.client.post(
+            "/api/stocks/dividends/",
+            {"received_date": "2026-06-01", "code": "7203", "name": "トヨタ", "amount": 3000},
+            format="json",
+        )
+        self.assertEqual(res.status_code, 201)
+        self.assertEqual(res.data["amount"], 3000)
+
+    def test_create_requires_amount_or_gross(self):
+        res = self.client.post(
+            "/api/stocks/dividends/",
+            {"received_date": "2026-06-01", "code": "7203", "name": "トヨタ"},
+            format="json",
+        )
+        self.assertEqual(res.status_code, 400)
+
+    def test_withholding_over_gross_rejected(self):
+        res = self.client.post(
+            "/api/stocks/dividends/",
+            {
+                "received_date": "2026-06-01",
+                "code": "7203",
+                "name": "トヨタ",
+                "gross_amount": 1000,
+                "tax_national": 900,
+                "tax_local": 200,
+            },
+            format="json",
+        )
+        self.assertEqual(res.status_code, 400)
+
+    def test_partial_update(self):
+        d = Dividend.objects.create(
+            user=self.user,
+            received_date=date(2026, 6, 1),
+            code="7203",
+            name="トヨタ",
+            amount=3000,
+        )
+        res = self.client.patch(
+            f"/api/stocks/dividends/{d.id}/",
+            {"shares": 100, "gross_amount": 5000, "tax_national": 765, "tax_local": 250, "amount": 3985},
+            format="json",
+        )
+        self.assertEqual(res.status_code, 200)
+        d.refresh_from_db()
+        self.assertEqual(d.shares, 100)
+        self.assertEqual(d.gross_amount, 5000)
+        self.assertEqual(d.amount, 3985)

@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useStocksStore } from '../stores/stocks'
 import { dateLabel, yen } from '../utils/format'
 import { lookupStockName, normalizeCode } from '../utils/stockNames'
@@ -8,14 +8,23 @@ const stocks = useStocksStore()
 const loading = ref(true)
 const error = ref('')
 const saving = ref(false)
+const editingId = ref(null)
 
-const form = ref({
-  received_date: new Date().toLocaleDateString('sv-SE'),
-  code: '',
-  name: '',
-  amount: null,
-  memo: '',
-})
+function emptyForm() {
+  return {
+    received_date: new Date().toLocaleDateString('sv-SE'),
+    code: '',
+    name: '',
+    shares: null,
+    gross_amount: null,
+    tax_national: null,
+    tax_local: null,
+    amount: null,
+    memo: '',
+  }
+}
+
+const form = ref(emptyForm())
 
 // 銘柄コードを入れたら銘柄マスタから銘柄名を自動補完 (手入力済みは上書きしない)
 const autoName = ref('')
@@ -31,6 +40,18 @@ watch(
   },
 )
 
+// 税引前と源泉徴収を入れたら税引後を自動計算 (税引後だけの手入力も可)
+// 履歴コピー・編集でフォームへ流し込む時は保存済みの税引後額を尊重して計算しない
+const suppressAutoCalc = ref(false)
+watch(
+  () => [form.value.gross_amount, form.value.tax_national, form.value.tax_local],
+  ([gross, national, local]) => {
+    if (suppressAutoCalc.value) return
+    if (typeof gross !== 'number') return
+    form.value.amount = Math.max(0, gross - (national || 0) - (local || 0))
+  },
+)
+
 const yearTotal = computed(() => {
   const year = String(new Date().getFullYear())
   return stocks.dividends
@@ -38,16 +59,31 @@ const yearTotal = computed(() => {
     .reduce((sum, d) => sum + d.amount, 0)
 })
 
+function numOrNull(v) {
+  return typeof v === 'number' ? v : null
+}
+
 async function submit() {
   error.value = ''
   saving.value = true
   try {
-    form.value.code = normalizeCode(form.value.code)
-    await stocks.createDividend(form.value)
-    form.value.code = ''
-    form.value.name = ''
-    form.value.amount = null
-    form.value.memo = ''
+    const payload = {
+      received_date: form.value.received_date,
+      code: normalizeCode(form.value.code),
+      name: form.value.name,
+      shares: numOrNull(form.value.shares),
+      gross_amount: numOrNull(form.value.gross_amount),
+      tax_national: numOrNull(form.value.tax_national),
+      tax_local: numOrNull(form.value.tax_local),
+      amount: form.value.amount,
+      memo: form.value.memo,
+    }
+    if (editingId.value) {
+      await stocks.updateDividend(editingId.value, payload)
+    } else {
+      await stocks.createDividend(payload)
+    }
+    resetForm()
   } catch (e) {
     error.value =
       Object.values(e.response?.data || {})
@@ -58,9 +94,53 @@ async function submit() {
   }
 }
 
+function resetForm() {
+  form.value = emptyForm()
+  editingId.value = null
+  autoName.value = ''
+  error.value = ''
+}
+
+function fillForm(d) {
+  autoName.value = ''
+  suppressAutoCalc.value = true
+  form.value = {
+    received_date: d.received_date,
+    code: d.code,
+    name: d.name,
+    shares: d.shares,
+    gross_amount: d.gross_amount,
+    tax_national: d.tax_national,
+    tax_local: d.tax_local,
+    amount: d.amount,
+    memo: d.memo,
+  }
+  window.scrollTo({ top: 0, behavior: 'smooth' })
+  nextTick(() => {
+    suppressAutoCalc.value = false
+  })
+}
+
+// 履歴タップ → 新規入力欄に内容をコピー (受取日は今日にする)
+function copyToForm(d) {
+  fillForm(d)
+  form.value.received_date = new Date().toLocaleDateString('sv-SE')
+  editingId.value = null
+}
+
+function startEdit(d) {
+  fillForm(d)
+  editingId.value = d.id
+}
+
 async function remove(d) {
   if (!confirm(`${d.name} の配当 ${yen(d.amount)} を削除しますか?`)) return
   await stocks.deleteDividend(d.id)
+  if (editingId.value === d.id) resetForm()
+}
+
+function taxTotal(d) {
+  return (d.tax_national || 0) + (d.tax_local || 0)
 }
 
 onMounted(async () => {
@@ -79,6 +159,12 @@ onMounted(async () => {
     </div>
 
     <form class="card" @submit.prevent="submit">
+      <p v-if="editingId" class="editing-banner">
+        登録済みの配当を編集中です
+        <button type="button" class="btn btn-secondary btn-small" @click="resetForm">
+          やめる
+        </button>
+      </p>
       <label for="received_date">受取日</label>
       <input id="received_date" v-model="form.received_date" type="date" required />
       <div class="two-col">
@@ -91,30 +177,66 @@ onMounted(async () => {
           <input id="name" v-model="form.name" type="text" required />
         </div>
       </div>
-      <label for="amount">受取額 (税引後・円)</label>
-      <input id="amount" v-model.number="form.amount" type="number" min="1" required />
+      <label for="shares">配当対象株数 (任意)</label>
+      <input id="shares" v-model.number="form.shares" type="number" min="1" />
+      <label for="gross_amount">配当金 (税引前・円) — NISAなど非課税なら空欄でOK</label>
+      <input id="gross_amount" v-model.number="form.gross_amount" type="number" min="0" />
+      <div class="two-col">
+        <div>
+          <label for="tax_national">源泉徴収 国税 (円)</label>
+          <input id="tax_national" v-model.number="form.tax_national" type="number" min="0" />
+        </div>
+        <div>
+          <label for="tax_local">源泉徴収 地方税 (円)</label>
+          <input id="tax_local" v-model.number="form.tax_local" type="number" min="0" />
+        </div>
+      </div>
+      <label for="amount">受取額 (税引後・円) — 税引前を入れると自動計算</label>
+      <input id="amount" v-model.number="form.amount" type="number" min="0" required />
       <label for="memo">メモ (任意)</label>
       <input id="memo" v-model="form.memo" type="text" />
       <p v-if="error" class="error-message">{{ error }}</p>
-      <button class="btn submit" type="submit" :disabled="saving">登録する</button>
+      <button class="btn submit" type="submit" :disabled="saving">
+        {{ editingId ? '変更を保存する' : '登録する' }}
+      </button>
     </form>
 
     <p v-if="!loading && stocks.dividends.length === 0" class="empty-message">
       まだ配当の記録がありません
     </p>
-    <div v-for="d in stocks.dividends" :key="d.id" class="card dividend-card">
+    <p v-if="stocks.dividends.length > 0" class="tap-hint">
+      履歴をタップすると内容を入力欄にコピーできます
+    </p>
+    <div
+      v-for="d in stocks.dividends"
+      :key="d.id"
+      class="card dividend-card"
+      :class="{ editing: d.id === editingId }"
+      @click="copyToForm(d)"
+    >
       <div class="row">
         <div>
           <span class="date">{{ d.received_date.slice(0, 4) }}年 {{ dateLabel(d.received_date) }}</span>
           <div>
             <span class="code">{{ d.code }}</span>
             <span class="name">{{ d.name }}</span>
+            <span v-if="d.shares" class="shares">{{ d.shares }}株</span>
           </div>
+          <p v-if="d.gross_amount != null" class="tax-detail">
+            税引前 {{ yen(d.gross_amount) }}
+            <template v-if="taxTotal(d) > 0">
+              / 源泉 {{ yen(taxTotal(d)) }} (国税 {{ yen(d.tax_national || 0) }}・地方税
+              {{ yen(d.tax_local || 0) }})
+            </template>
+          </p>
           <p v-if="d.memo" class="memo">{{ d.memo }}</p>
         </div>
         <div class="right">
           <span class="amount">{{ yen(d.amount) }}</span>
-          <button class="btn btn-secondary btn-small" @click="remove(d)">削除</button>
+          <div class="actions">
+            <button class="btn btn-secondary btn-small" @click.stop="startEdit(d)">編集</button>
+            <button class="btn btn-secondary btn-small" @click.stop="remove(d)">削除</button>
+          </div>
         </div>
       </div>
     </div>
@@ -144,12 +266,36 @@ onMounted(async () => {
   gap: 12px;
 }
 
+.editing-banner {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  background: var(--color-bg, #f5f5f5);
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 0.85rem;
+  font-weight: 700;
+  margin-bottom: 12px;
+}
+
 .submit {
   margin-top: 20px;
 }
 
+.tap-hint {
+  font-size: 0.8rem;
+  color: var(--color-text-sub);
+  margin: 4px 2px 8px;
+}
+
 .dividend-card {
   padding: 12px 16px;
+  cursor: pointer;
+}
+
+.dividend-card.editing {
+  outline: 2px solid var(--color-primary, #4a90d9);
 }
 
 .row {
@@ -173,6 +319,18 @@ onMounted(async () => {
   font-weight: 700;
 }
 
+.shares {
+  font-size: 0.85rem;
+  color: var(--color-text-sub);
+  margin-left: 6px;
+}
+
+.tax-detail {
+  font-size: 0.8rem;
+  color: var(--color-text-sub);
+  margin-top: 2px;
+}
+
 .memo {
   font-size: 0.85rem;
   color: var(--color-text-sub);
@@ -183,6 +341,11 @@ onMounted(async () => {
   display: flex;
   flex-direction: column;
   align-items: flex-end;
+  gap: 6px;
+}
+
+.actions {
+  display: flex;
   gap: 6px;
 }
 

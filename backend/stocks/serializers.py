@@ -37,12 +37,47 @@ class TradeSerializer(serializers.ModelSerializer):
 
 
 class DividendSerializer(serializers.ModelSerializer):
+    # 税引前が入っていれば税引後 (amount) は省略可 (源泉徴収を引いて自動計算)
+    amount = serializers.IntegerField(required=False, min_value=0)
+
     class Meta:
         model = Dividend
-        fields = ["id", "received_date", "code", "name", "amount", "memo"]
+        fields = [
+            "id",
+            "received_date",
+            "code",
+            "name",
+            "shares",
+            "gross_amount",
+            "tax_national",
+            "tax_local",
+            "amount",
+            "memo",
+        ]
 
     def validate_code(self, value):
         return value.strip().upper()
+
+    def validate(self, attrs):
+        # 部分更新では未指定フィールドを既存値で補って整合を見る
+        def current(field):
+            if field in attrs:
+                return attrs[field]
+            return getattr(self.instance, field, None) if self.instance else None
+
+        gross = current("gross_amount")
+        withheld = (current("tax_national") or 0) + (current("tax_local") or 0)
+        if gross is not None and withheld > gross:
+            raise serializers.ValidationError(
+                {"gross_amount": "源泉徴収額の合計が税引前配当金を上回っています。"}
+            )
+        if current("amount") is None:
+            if gross is None:
+                raise serializers.ValidationError(
+                    {"amount": "税引後の受取額か税引前の配当金を入力してください。"}
+                )
+            attrs["amount"] = gross - withheld
+        return attrs
 
 
 class WatchSerializer(serializers.ModelSerializer):

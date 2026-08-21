@@ -53,7 +53,10 @@ class Trade(models.Model):
 
 
 class Dividend(models.Model):
-    """配当金・分配金の受取1件。金額は税引後の受取額。"""
+    """配当金・分配金の受取1件。amount は税引後の受取額 (集計はこれを使う)。
+
+    特定口座向けに税引前・源泉徴収の内訳も持てる (NISA 等は税引後のみで可)。
+    """
 
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="stock_dividends"
@@ -61,6 +64,10 @@ class Dividend(models.Model):
     received_date = models.DateField("受取日")
     code = models.CharField("銘柄コード", max_length=10)
     name = models.CharField("銘柄名", max_length=100)
+    shares = models.PositiveIntegerField("配当対象株数", null=True, blank=True)
+    gross_amount = models.PositiveIntegerField("配当金 (税引前・円)", null=True, blank=True)
+    tax_national = models.PositiveIntegerField("源泉徴収額 国税 (円)", null=True, blank=True)
+    tax_local = models.PositiveIntegerField("源泉徴収額 地方税 (円)", null=True, blank=True)
     amount = models.PositiveIntegerField("受取額 (税引後・円)")
     memo = models.CharField("メモ", max_length=200, blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
