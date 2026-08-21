@@ -23,8 +23,11 @@ DATABASES = {
 
 STATIC_ROOT = env("STATIC_ROOT", default="/opt/kakei/backend/staticfiles")
 
-# Nginx が TLS を終端する
-SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
-SESSION_COOKIE_SECURE = True
-CSRF_COOKIE_SECURE = True
-SECURE_HSTS_SECONDS = 31536000
+# HTTPS 運用時のみ有効化 (ドメイン未取得で HTTP 公開する間は USE_HTTPS=false)
+USE_HTTPS = env.bool("USE_HTTPS", default=True)
+if USE_HTTPS:
+    # Nginx が TLS を終端する
+    SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+    SECURE_HSTS_SECONDS = 31536000

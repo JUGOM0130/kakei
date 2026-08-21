@@ -2,7 +2,7 @@ import { createRouter, createWebHistory } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
 
 const router = createRouter({
-  history: createWebHistory(),
+  history: createWebHistory(import.meta.env.BASE_URL),
   routes: [
     { path: '/login', name: 'login', component: () => import('../pages/LoginPage.vue'), meta: { public: true } },
     { path: '/register', name: 'register', component: () => import('../pages/RegisterPage.vue'), meta: { public: true } },

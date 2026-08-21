@@ -2,8 +2,9 @@ import axios from 'axios'
 
 // 同一オリジン (Vite プロキシ / Nginx) 前提。axios が csrftoken Cookie を
 // X-CSRFToken ヘッダに自動転記する。
+// BASE_URL は vite.config.js の base ('/kakei/') に追従する
 const api = axios.create({
-  baseURL: '/api',
+  baseURL: import.meta.env.BASE_URL.replace(/\/$/, '') + '/api',
   xsrfCookieName: 'csrftoken',
   xsrfHeaderName: 'X-CSRFToken',
 })
