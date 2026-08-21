@@ -12,6 +12,7 @@ const router = createRouter({
     { path: '/transactions/:id/edit', name: 'transaction-edit', component: () => import('../pages/TransactionFormPage.vue'), props: true },
     { path: '/recurring', name: 'recurring', component: () => import('../pages/RecurringPage.vue') },
     { path: '/categories', name: 'categories', component: () => import('../pages/CategoriesPage.vue') },
+    { path: '/settings', name: 'settings', component: () => import('../pages/SettingsPage.vue') },
   ],
 })
 

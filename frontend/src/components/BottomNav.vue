@@ -4,7 +4,7 @@
     <RouterLink to="/transactions" class="nav-item"><span class="icon">📄</span>履歴</RouterLink>
     <RouterLink to="/transactions/new" class="fab" aria-label="取引を追加">＋</RouterLink>
     <RouterLink to="/recurring" class="nav-item"><span class="icon">🔁</span>固定費</RouterLink>
-    <RouterLink to="/categories" class="nav-item"><span class="icon">🏷️</span>カテゴリ</RouterLink>
+    <RouterLink to="/settings" class="nav-item"><span class="icon">⚙️</span>設定</RouterLink>
   </nav>
 </template>
 

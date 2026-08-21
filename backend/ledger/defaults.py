@@ -1,4 +1,4 @@
-from .models import Category
+from .models import Category, PaymentMethod
 
 # (type, name, color)
 DEFAULT_CATEGORIES = [
@@ -18,8 +18,15 @@ DEFAULT_CATEGORIES = [
 ]
 
 
+DEFAULT_PAYMENT_METHODS = ["現金"]
+
+
 def seed_default_categories(user):
     Category.objects.bulk_create(
         Category(user=user, type=type_, name=name, color=color, sort_order=i)
         for i, (type_, name, color) in enumerate(DEFAULT_CATEGORIES)
+    )
+    PaymentMethod.objects.bulk_create(
+        PaymentMethod(user=user, name=name, sort_order=i)
+        for i, name in enumerate(DEFAULT_PAYMENT_METHODS)
     )

@@ -1,17 +1,15 @@
 <script setup>
 import { onMounted, watch } from 'vue'
-import { useRouter } from 'vue-router'
-import { useAuthStore } from '../stores/auth'
 import { useLedgerStore } from '../stores/ledger'
 import MonthPicker from '../components/MonthPicker.vue'
 import MinimumRequiredCard from '../components/MinimumRequiredCard.vue'
 import SummaryCard from '../components/SummaryCard.vue'
 import CategoryPie from '../components/CategoryPie.vue'
 import RecurringChecklist from '../components/RecurringChecklist.vue'
+import SharedCard from '../components/SharedCard.vue'
+import PaymentMethodTotals from '../components/PaymentMethodTotals.vue'
 
-const auth = useAuthStore()
 const ledger = useLedgerStore()
-const router = useRouter()
 
 onMounted(() => ledger.fetchSummary())
 watch(() => ledger.month, () => ledger.fetchSummary())
@@ -24,18 +22,23 @@ async function onPay(id) {
   }
 }
 
-async function logout() {
-  await auth.logout()
-  router.push('/login')
+async function onSettle() {
+  try {
+    await ledger.settle()
+  } catch (e) {
+    alert(e.response?.data?.detail || '精算の記録に失敗しました。')
+  }
+}
+
+async function onUnsettle(id) {
+  if (!confirm('精算済みの記録を取り消しますか?')) return
+  await ledger.unsettle(id)
 }
 </script>
 
 <template>
   <div class="page">
-    <header class="header">
-      <h1 class="page-title">ホーム</h1>
-      <button class="btn btn-secondary btn-small" @click="logout">ログアウト</button>
-    </header>
+    <h1 class="page-title">ホーム</h1>
     <MonthPicker />
     <template v-if="ledger.summary">
       <MinimumRequiredCard :recurring="ledger.summary.recurring" />
@@ -43,6 +46,12 @@ async function logout() {
         :income="ledger.summary.income_total"
         :expense="ledger.summary.expense_total"
         :balance="ledger.summary.balance"
+      />
+      <SharedCard
+        v-if="ledger.summary.shared.enabled"
+        :shared="ledger.summary.shared"
+        @settle="onSettle"
+        @unsettle="onUnsettle"
       />
       <div class="card">
         <div class="heading">支出の内訳</div>
@@ -52,23 +61,13 @@ async function logout() {
         />
         <p v-else class="empty-message">今月の支出はまだありません。</p>
       </div>
+      <PaymentMethodTotals :items="ledger.summary.payment_methods" />
       <RecurringChecklist :items="ledger.summary.recurring.items" @pay="onPay" />
     </template>
   </div>
 </template>
 
 <style scoped>
-.header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 8px;
-}
-
-.header .page-title {
-  margin-bottom: 0;
-}
-
 .heading {
   font-weight: 700;
   margin-bottom: 8px;

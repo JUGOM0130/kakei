@@ -9,6 +9,7 @@ export const useLedgerStore = defineStore('ledger', {
     transactions: [],
     categories: [],
     recurring: [],
+    paymentMethods: [],
   }),
   actions: {
     prevMonth() {
@@ -36,8 +37,21 @@ export const useLedgerStore = defineStore('ledger', {
       const { data } = await api.get('/recurring-payments/')
       this.recurring = data
     },
+    async fetchPaymentMethods(force = false) {
+      if (this.paymentMethods.length && !force) return
+      const { data } = await api.get('/payment-methods/')
+      this.paymentMethods = data
+    },
     async pay(id) {
       await api.post(`/recurring-payments/${id}/pay/`, { month: this.month })
+      await this.fetchSummary()
+    },
+    async settle() {
+      await api.post('/settlements/', { month: this.month })
+      await this.fetchSummary()
+    },
+    async unsettle(id) {
+      await api.delete(`/settlements/${id}/`)
       await this.fetchSummary()
     },
   },

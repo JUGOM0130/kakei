@@ -6,9 +6,11 @@ Vue 3 + Django REST Framework の家計管理 Web アプリ。スマホブラウ
 
 - 収入・支出の記録 (CRUD)、カテゴリ別管理・色分け
 - 月次サマリー: 収入・支出・収支、カテゴリ別内訳のドーナツグラフ
-- **定期支払 (固定費)**: 家賃・サブスク等をテンプレート登録し、月ごとに「支払済にする」で記帳
-- **今月の最低必要額**: 有効な固定費の合計をダッシュボード最上部に表示 (支払済/残り + プログレスバー)
-- マルチユーザー (会員登録制、データはユーザーごとに完全分離)
+- **定期支払 (固定費)**: 家賃・サブスク等をテンプレート登録し、月ごとに「支払済にする」で記帳。毎月/2ヶ月ごと(水道)/4ヶ月ごと(固定資産税)/半年/毎年の間隔に対応
+- **今月の最低必要額**: 当月が支払月の固定費合計をダッシュボード最上部に表示 (支払済/残り + プログレスバー)
+- **グループ共有・精算 (2人)**: 招待コードで夫婦グループを作成。支出1件ごとに共有(折半または任意の割合)を選択でき、月次で「誰が誰にいくら渡すか」を表示、精算済み記録も可能。デフォルト負担割合はグループ設定で調整
+- **支払方法タグ**: 現金・カードA等を登録して支出にタグ付け。ホームにカード別の月間合計(請求予定額)、履歴で絞り込み
+- マルチユーザー (会員登録制、共有した記録以外はユーザーごとに完全分離)
 
 ## 技術スタック
 
@@ -159,6 +161,10 @@ curl http://v133-18-242-137.vir.kagoya.net/kakei/api/auth/me/   # 401 JSON
 | GET | `/api/auth/csrf/` | CSRF トークン Cookie 配布 |
 | CRUD | `/api/categories/` | カテゴリ (`?type=income\|expense`) |
 | CRUD | `/api/transactions/` | 取引 (`?month=YYYY-MM&category=&type=`) |
-| CRUD | `/api/recurring-payments/` | 定期支払 (`?is_active=`) |
-| POST | `/api/recurring-payments/{id}/pay/` | 当月の支払を記帳 (二重払いは 409) |
-| GET | `/api/summary/monthly/?month=YYYY-MM` | 月次サマリー + 最低必要額 |
+| CRUD | `/api/payment-methods/` | 支払方法 (現金・カード) |
+| CRUD | `/api/recurring-payments/` | 定期支払 (`?is_active=`)。間隔は interval_months + anchor_month |
+| POST | `/api/recurring-payments/{id}/pay/` | 当月の支払を記帳 (対象外の月は 400、二重払いは 409) |
+| GET/POST/PATCH | `/api/group/` | グループ取得/作成/負担割合変更 |
+| POST | `/api/group/join/` `leave/` | 招待コードで参加 / 退出 |
+| POST/DELETE | `/api/settlements/` `{id}/` | 月次精算の記録 / 取消 |
+| GET | `/api/summary/monthly/?month=YYYY-MM` | 月次サマリー + 最低必要額 + 共有精算 + 支払方法別合計 |

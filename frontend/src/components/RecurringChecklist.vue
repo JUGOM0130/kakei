@@ -23,7 +23,10 @@ const sorted = computed(() =>
         <span class="dot" :style="{ background: item.category.color }"></span>
         <div class="info">
           <div class="name">{{ item.name }}</div>
-          <div class="sub">{{ item.day_of_month }}日 ・ {{ item.category.name }}</div>
+          <div class="sub">
+            {{ item.day_of_month }}日 ・ {{ item.category.name
+            }}{{ item.interval_months > 1 ? ` ・ ${item.interval_months}ヶ月ごと` : '' }}
+          </div>
         </div>
         <div class="amount">{{ yen(item.amount) }}</div>
         <span v-if="item.paid" class="status">✓ 支払済</span>

@@ -6,16 +6,21 @@ import { yen, dateLabel } from '../utils/format'
 
 const ledger = useLedgerStore()
 const typeFilter = ref('') // '' | 'income' | 'expense'
+const methodFilter = ref('') // '' | payment method id
 
 function load() {
   const params = {}
   if (typeFilter.value) params.type = typeFilter.value
+  if (methodFilter.value) params.payment_method = methodFilter.value
   ledger.fetchTransactions(params)
 }
 
-onMounted(load)
+onMounted(async () => {
+  await ledger.fetchPaymentMethods()
+  load()
+})
 watch(() => ledger.month, load)
-watch(typeFilter, load)
+watch([typeFilter, methodFilter], load)
 
 const grouped = computed(() => {
   const map = new Map()
@@ -31,24 +36,32 @@ const grouped = computed(() => {
   <div class="page">
     <h1 class="page-title">履歴</h1>
     <MonthPicker />
-    <div class="chip-row tabs">
-      <button class="chip" :class="{ active: typeFilter === '' }" @click="typeFilter = ''">
-        すべて
-      </button>
-      <button
-        class="chip"
-        :class="{ active: typeFilter === 'income' }"
-        @click="typeFilter = 'income'"
-      >
-        収入
-      </button>
-      <button
-        class="chip"
-        :class="{ active: typeFilter === 'expense' }"
-        @click="typeFilter = 'expense'"
-      >
-        支出
-      </button>
+    <div class="filters">
+      <div class="chip-row">
+        <button class="chip" :class="{ active: typeFilter === '' }" @click="typeFilter = ''">
+          すべて
+        </button>
+        <button
+          class="chip"
+          :class="{ active: typeFilter === 'income' }"
+          @click="typeFilter = 'income'"
+        >
+          収入
+        </button>
+        <button
+          class="chip"
+          :class="{ active: typeFilter === 'expense' }"
+          @click="typeFilter = 'expense'"
+        >
+          支出
+        </button>
+      </div>
+      <select v-if="ledger.paymentMethods.length" v-model="methodFilter" class="method-select">
+        <option value="">支払方法: すべて</option>
+        <option v-for="m in ledger.paymentMethods" :key="m.id" :value="m.id">
+          {{ m.name }}
+        </option>
+      </select>
     </div>
 
     <p v-if="!ledger.transactions.length" class="empty-message">今月の記録はまだありません。</p>
@@ -56,16 +69,25 @@ const grouped = computed(() => {
     <section v-for="[date, txs] in grouped" :key="date" class="day-group">
       <h2 class="day-label">{{ dateLabel(date) }}</h2>
       <div class="card day-card">
-        <RouterLink
+        <component
+          :is="tx.is_mine ? 'RouterLink' : 'div'"
           v-for="tx in txs"
           :key="tx.id"
-          :to="`/transactions/${tx.id}/edit`"
+          :to="tx.is_mine ? `/transactions/${tx.id}/edit` : undefined"
           class="row"
+          :class="{ theirs: !tx.is_mine }"
         >
           <span class="dot" :style="{ background: tx.category.color }"></span>
           <div class="info">
-            <div class="cat">{{ tx.category.name }}</div>
-            <div v-if="tx.memo" class="memo">{{ tx.memo }}</div>
+            <div class="cat">
+              {{ tx.category.name }}
+              <span v-if="tx.is_shared" class="badge shared-badge">👥 共有</span>
+              <span v-if="!tx.is_mine" class="badge payer-badge">{{ tx.payer.username }}</span>
+            </div>
+            <div class="sub">
+              <span v-if="tx.payment_method">{{ tx.payment_method.name }}</span>
+              <span v-if="tx.memo">{{ tx.memo }}</span>
+            </div>
           </div>
           <span
             class="amount"
@@ -73,15 +95,23 @@ const grouped = computed(() => {
           >
             {{ tx.category.type === 'income' ? '+' : '-' }}{{ yen(tx.amount) }}
           </span>
-        </RouterLink>
+        </component>
       </div>
     </section>
   </div>
 </template>
 
 <style scoped>
-.tabs {
+.filters {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
   margin-bottom: 16px;
+}
+
+.method-select {
+  width: auto;
+  align-self: flex-start;
 }
 
 .day-label {
@@ -110,6 +140,10 @@ const grouped = computed(() => {
   border-bottom: none;
 }
 
+.row.theirs {
+  opacity: 0.85;
+}
+
 .dot {
   width: 10px;
   height: 10px;
@@ -124,14 +158,38 @@ const grouped = computed(() => {
 
 .cat {
   font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
 }
 
-.memo {
+.badge {
+  font-size: 0.65rem;
+  font-weight: 600;
+  border-radius: 999px;
+  padding: 1px 8px;
+}
+
+.shared-badge {
+  background: #e8f5e9;
+  color: var(--color-primary);
+}
+
+.payer-badge {
+  background: var(--color-bg);
+  color: var(--color-text-sub);
+  border: 1px solid var(--color-border);
+}
+
+.sub {
   font-size: 0.75rem;
   color: var(--color-text-sub);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  display: flex;
+  gap: 8px;
 }
 
 .amount {
