@@ -36,9 +36,19 @@ class TradeSerializer(serializers.ModelSerializer):
         return value.strip().upper()
 
 
+def _money_field(**kwargs):
+    # 外貨の小数に対応しつつ JSON では数値のまま返す
+    return serializers.DecimalField(
+        max_digits=14, decimal_places=2, min_value=0, coerce_to_string=False, **kwargs
+    )
+
+
 class DividendSerializer(serializers.ModelSerializer):
     # 税引前が入っていれば税引後 (amount) は省略可 (源泉徴収を引いて自動計算)
-    amount = serializers.IntegerField(required=False, min_value=0)
+    amount = _money_field(required=False)
+    gross_amount = _money_field(required=False, allow_null=True)
+    tax_national = _money_field(required=False, allow_null=True)
+    tax_local = _money_field(required=False, allow_null=True)
 
     class Meta:
         model = Dividend
@@ -47,6 +57,7 @@ class DividendSerializer(serializers.ModelSerializer):
             "received_date",
             "code",
             "name",
+            "currency",
             "shares",
             "gross_amount",
             "tax_national",

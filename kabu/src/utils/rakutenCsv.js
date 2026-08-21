@@ -175,11 +175,7 @@ export function parseRakutenDividendCsv(text) {
   const excluded = []
   for (const r of rows.slice(headerIdx + 1)) {
     const label = `${r[idx.date]} ${r[idx.code]} ${r[idx.name]}`
-    const currency = (r[idx.currency] || '').trim()
-    if (currency && currency !== '円') {
-      excluded.push({ label, reason: `外貨建て (${currency}) は円換算できないため対象外` })
-      continue
-    }
+    const currency = (r[idx.currency] || '').trim() || '円'
     const received_date = toDate(r[idx.date])
     const gross = toNumber(r[idx.gross])
     const taxTotal = toNumber(r[idx.tax])
@@ -189,13 +185,22 @@ export function parseRakutenDividendCsv(text) {
       continue
     }
     const shares = toNumber(r[idx.shares])
+    // 国内配当のみ源泉徴収を国税/地方税に分解する。外国株は外国源泉徴収が
+    // 別にあるため復元できず、税額合計をそのまま国税欄に入れる
+    let taxes = { tax_national: null, tax_local: null }
+    if (gross > 0 && currency === '円') {
+      taxes = splitWithholding(gross, taxTotal)
+    } else if (taxTotal > 0) {
+      taxes = { tax_national: taxTotal, tax_local: 0 }
+    }
     dividends.push({
       received_date,
       code: normalizeCode(r[idx.code]),
       name: (r[idx.name] || '').trim(),
+      currency,
       shares: shares > 0 ? shares : null,
       gross_amount: gross > 0 ? gross : null,
-      ...(gross > 0 ? splitWithholding(gross, taxTotal) : { tax_national: null, tax_local: null }),
+      ...taxes,
       amount,
       memo: (r[idx.account] || '').trim(),
     })

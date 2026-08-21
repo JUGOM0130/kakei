@@ -22,7 +22,7 @@ class TradeAdmin(admin.ModelAdmin):
 
 @admin.register(Dividend)
 class DividendAdmin(admin.ModelAdmin):
-    list_display = ["received_date", "user", "code", "name", "amount"]
+    list_display = ["received_date", "user", "code", "name", "amount", "currency"]
     search_fields = ["code", "name"]
 
 

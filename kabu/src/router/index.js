@@ -14,6 +14,7 @@ const router = createRouter({
     { path: '/watch', name: 'watch', component: () => import('../pages/WatchPage.vue') },
     { path: '/dividends', name: 'dividends', component: () => import('../pages/DividendsPage.vue') },
     { path: '/import', name: 'import', component: () => import('../pages/ImportPage.vue') },
+    { path: '/analysis', name: 'analysis', component: () => import('../pages/AnalysisPage.vue') },
   ],
 })
 

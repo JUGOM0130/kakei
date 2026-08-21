@@ -56,6 +56,7 @@ class Dividend(models.Model):
     """配当金・分配金の受取1件。amount は税引後の受取額 (集計はこれを使う)。
 
     特定口座向けに税引前・源泉徴収の内訳も持てる (NISA 等は税引後のみで可)。
+    外国株は受取通貨のまま保存する (currency が「円」以外の行は円の集計に混ぜない)。
     """
 
     user = models.ForeignKey(
@@ -64,11 +65,18 @@ class Dividend(models.Model):
     received_date = models.DateField("受取日")
     code = models.CharField("銘柄コード", max_length=10)
     name = models.CharField("銘柄名", max_length=100)
+    currency = models.CharField("受取通貨", max_length=10, default="円")
     shares = models.PositiveIntegerField("配当対象株数", null=True, blank=True)
-    gross_amount = models.PositiveIntegerField("配当金 (税引前・円)", null=True, blank=True)
-    tax_national = models.PositiveIntegerField("源泉徴収額 国税 (円)", null=True, blank=True)
-    tax_local = models.PositiveIntegerField("源泉徴収額 地方税 (円)", null=True, blank=True)
-    amount = models.PositiveIntegerField("受取額 (税引後・円)")
+    gross_amount = models.DecimalField(
+        "配当金 (税引前)", max_digits=14, decimal_places=2, null=True, blank=True
+    )
+    tax_national = models.DecimalField(
+        "源泉徴収額 国税", max_digits=14, decimal_places=2, null=True, blank=True
+    )
+    tax_local = models.DecimalField(
+        "源泉徴収額 地方税", max_digits=14, decimal_places=2, null=True, blank=True
+    )
+    amount = models.DecimalField("受取額 (税引後)", max_digits=14, decimal_places=2)
     memo = models.CharField("メモ", max_length=200, blank=True, default="")
     # CSV 取込行の内容ハッシュ (同一ファイル再取込の冪等性用)。手入力は NULL
     import_key = models.CharField("取込キー", max_length=64, null=True, blank=True, default=None)

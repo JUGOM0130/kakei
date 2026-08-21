@@ -154,21 +154,27 @@ class ImportTradesView(APIView):
         )
 
 
+def _money_str(v):
+    """Decimal('319.00') と 319 を同じ文字列にする (取込キーの互換維持)。"""
+    if v is None:
+        return ""
+    return format(Decimal(v).normalize(), "f")
+
+
 def _dividend_content_tuple(data):
-    """配当内容の正規化タプル。取込キーの基準。"""
+    """配当内容の正規化タプル。取込キーの基準。
 
-    def s(field):
-        v = data.get(field)
-        return "" if v is None else str(v)
-
+    通貨は含めない (過去に取り込んだ円配当のキーを変えないため。
+    同日・同銘柄・同金額で通貨だけ違う行は実質あり得ない)。
+    """
     return (
         str(data["received_date"]),
         data["code"],
-        s("shares"),
-        s("gross_amount"),
-        s("tax_national"),
-        s("tax_local"),
-        str(data["amount"]),
+        "" if data.get("shares") is None else str(data["shares"]),
+        _money_str(data.get("gross_amount")),
+        _money_str(data.get("tax_national")),
+        _money_str(data.get("tax_local")),
+        _money_str(data["amount"]),
     )
 
 
@@ -193,7 +199,7 @@ class ImportDividendsView(APIView):
             )
         )
         manual_counts = Counter(
-            (str(d.received_date), d.code, str(d.amount))
+            (str(d.received_date), d.code, _money_str(d.amount))
             for d in Dividend.objects.filter(user=request.user, import_key__isnull=True)
         )
 
@@ -210,7 +216,7 @@ class ImportDividendsView(APIView):
             if key in existing_keys:
                 skipped_imported += 1
                 continue
-            manual_key = (str(data["received_date"]), data["code"], str(data["amount"]))
+            manual_key = (str(data["received_date"]), data["code"], _money_str(data["amount"]))
             m = manual_occurrences[manual_key]
             manual_occurrences[manual_key] += 1
             if m < manual_counts[manual_key]:
@@ -361,34 +367,54 @@ class PriceView(APIView):
 
 
 class SummaryView(APIView):
-    """年間サマリー: 実現損益・配当の合計、月別推移、銘柄別内訳。"""
+    """年間サマリー: 実現損益・配当の合計、月別推移、銘柄別内訳、全期間の累計。
+
+    外貨建て配当は円と合算できないため、通貨別の合計として別枠で返す。
+    """
 
     def get(self, request):
         year = parse_year(request)
         trades = list(Trade.objects.filter(user=request.user))
         realized, _ = scan_trades(trades)
-        dividends = Dividend.objects.filter(user=request.user, received_date__year=year)
+        all_dividends = list(Dividend.objects.filter(user=request.user))
 
         monthly = {f"{year}-{m:02d}": {"realized": 0, "dividends": 0} for m in range(1, 13)}
         by_code = defaultdict(lambda: {"name": "", "realized": 0, "dividends": 0})
         names = {}
 
         realized_total = 0
+        realized_all = 0
         for t in trades:
             names[t.code] = t.name or names.get(t.code, "")
             pnl = realized.get(t.id)
-            if pnl is None or t.trade_date.year != year:
+            if pnl is None:
+                continue
+            realized_all += pnl
+            if t.trade_date.year != year:
                 continue
             realized_total += pnl
             monthly[t.trade_date.strftime("%Y-%m")]["realized"] += pnl
             by_code[t.code]["realized"] += pnl
 
         dividend_total = 0
-        for d in dividends:
+        dividend_all = 0
+        foreign_total = defaultdict(float)
+        foreign_all = defaultdict(float)
+        for d in all_dividends:
             names[d.code] = d.name or names.get(d.code, "")
-            dividend_total += d.amount
-            monthly[d.received_date.strftime("%Y-%m")]["dividends"] += d.amount
-            by_code[d.code]["dividends"] += d.amount
+            in_year = d.received_date.year == year
+            if d.currency != "円":
+                foreign_all[d.currency] += float(d.amount)
+                if in_year:
+                    foreign_total[d.currency] += float(d.amount)
+                continue
+            amount = int(d.amount)
+            dividend_all += amount
+            if not in_year:
+                continue
+            dividend_total += amount
+            monthly[d.received_date.strftime("%Y-%m")]["dividends"] += amount
+            by_code[d.code]["dividends"] += amount
 
         rows = []
         for code, row in by_code.items():
@@ -405,7 +431,7 @@ class SummaryView(APIView):
 
         years = sorted(
             {t.trade_date.year for t in trades}
-            | {d.year for d in Dividend.objects.filter(user=request.user).dates("received_date", "year")}
+            | {d.received_date.year for d in all_dividends}
             | {date.today().year}
         )
 
@@ -415,10 +441,17 @@ class SummaryView(APIView):
                 "years": years,
                 "realized": realized_total,
                 "dividends": dividend_total,
+                "dividends_foreign": dict(foreign_total),
                 "total": realized_total + dividend_total,
                 "monthly": [
                     {"month": month, **vals} for month, vals in sorted(monthly.items())
                 ],
                 "by_code": rows,
+                "all_time": {
+                    "realized": realized_all,
+                    "dividends": dividend_all,
+                    "dividends_foreign": dict(foreign_all),
+                    "total": realized_all + dividend_all,
+                },
             }
         )

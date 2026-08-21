@@ -2,6 +2,13 @@ export function yen(n) {
   return '¥' + Number(n ?? 0).toLocaleString('ja-JP')
 }
 
+// 通貨付き金額。円は ¥1,234、外貨は 0.39 USドル のように表示する
+export function money(n, currency) {
+  if (!currency || currency === '円') return yen(n)
+  const v = Number(n ?? 0)
+  return `${v.toLocaleString('ja-JP', { maximumFractionDigits: 2 })} ${currency}`
+}
+
 // 損益表示用: プラスに + を付ける
 export function signedYen(n) {
   const v = Number(n ?? 0)

@@ -6,7 +6,7 @@ import {
   parseRakutenTradeCsv,
   readFileAsText,
 } from '../utils/rakutenCsv'
-import { accountLabel, dateLabel, yen } from '../utils/format'
+import { accountLabel, dateLabel, money, yen } from '../utils/format'
 
 const csvType = ref('') // 'trades' | 'dividends'
 const trades = ref([])
@@ -19,7 +19,14 @@ const importing = ref(false)
 
 const buyCount = computed(() => trades.value.filter((t) => t.side === 'buy').length)
 const sellCount = computed(() => trades.value.filter((t) => t.side === 'sell').length)
-const dividendTotal = computed(() => dividends.value.reduce((sum, d) => sum + d.amount, 0))
+// 通貨別の税引後合計 (円が先頭)
+const dividendTotals = computed(() => {
+  const map = new Map()
+  for (const d of dividends.value) {
+    map.set(d.currency, (map.get(d.currency) || 0) + d.amount)
+  }
+  return [...map.entries()].sort(([a], [b]) => (a === '円' ? -1 : b === '円' ? 1 : 0))
+})
 
 async function onFile(e) {
   const file = e.target.files[0]
@@ -150,7 +157,9 @@ async function doImport() {
     <template v-if="dividends.length">
       <div class="card">
         <p class="summary">
-          配当金CSV: {{ dividends.length }}件 (税引後合計 {{ yen(dividendTotal) }})
+          配当金CSV: {{ dividends.length }}件 (税引後合計
+          <template v-for="([cur, total], i) in dividendTotals" :key="cur">
+            <template v-if="i > 0"> + </template>{{ money(total, cur) }}</template>)
           <template v-if="excluded.length"> ・対象外 {{ excluded.length }}件</template>
         </p>
         <button class="btn" :disabled="importing" @click="doImport">この内容で取り込む</button>
@@ -174,15 +183,15 @@ async function doImport() {
               <td class="nowrap">{{ d.received_date.slice(0, 4) }}年 {{ dateLabel(d.received_date) }}</td>
               <td><span class="code">{{ d.code }}</span>{{ d.name }}</td>
               <td class="num">{{ d.shares ? d.shares.toLocaleString() : '-' }}</td>
-              <td class="num nowrap">{{ d.gross_amount != null ? yen(d.gross_amount) : '-' }}</td>
+              <td class="num nowrap">{{ d.gross_amount != null ? money(d.gross_amount, d.currency) : '-' }}</td>
               <td class="num nowrap">
                 <template v-if="(d.tax_national || 0) + (d.tax_local || 0) > 0">
-                  {{ yen((d.tax_national || 0) + (d.tax_local || 0)) }}
-                  <span class="fee">(国 {{ yen(d.tax_national || 0) }} / 地方 {{ yen(d.tax_local || 0) }})</span>
+                  {{ money((d.tax_national || 0) + (d.tax_local || 0), d.currency) }}
+                  <span v-if="d.tax_local" class="fee">(国 {{ yen(d.tax_national || 0) }} / 地方 {{ yen(d.tax_local || 0) }})</span>
                 </template>
                 <template v-else>-</template>
               </td>
-              <td class="num nowrap">{{ yen(d.amount) }}</td>
+              <td class="num nowrap">{{ money(d.amount, d.currency) }}</td>
               <td class="nowrap">{{ d.memo }}</td>
             </tr>
           </tbody>

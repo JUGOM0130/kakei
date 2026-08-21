@@ -88,6 +88,49 @@ class SummaryApiTests(APITestCase):
         self.assertEqual(march["realized"], 10000)
         self.assertEqual(res.data["by_code"][0]["code"], "7203")
 
+    def test_summary_all_time_and_foreign_currency(self):
+        # 2025年: 売却益 5000円 + 配当 1000円 / 2026年: 配当 3000円 + 米ドル配当
+        make_trade(self.user, trade_date=date(2025, 1, 10), price=Decimal("1000"))
+        make_trade(
+            self.user,
+            trade_date=date(2025, 3, 5),
+            side=Trade.Side.SELL,
+            price=Decimal("1050"),
+        )
+        Dividend.objects.create(
+            user=self.user,
+            received_date=date(2025, 6, 1),
+            code="7203",
+            name="トヨタ",
+            amount=1000,
+        )
+        Dividend.objects.create(
+            user=self.user,
+            received_date=date(2026, 6, 1),
+            code="7203",
+            name="トヨタ",
+            amount=3000,
+        )
+        Dividend.objects.create(
+            user=self.user,
+            received_date=date(2026, 6, 16),
+            code="PFE",
+            name="PFIZER INC.",
+            currency="USドル",
+            amount=Decimal("0.39"),
+            gross_amount=Decimal("0.43"),
+        )
+        res = self.client.get("/api/stocks/summary/", {"year": 2026})
+        # 年間: 外貨は円の合計に混ざらず通貨別に返る
+        self.assertEqual(res.data["dividends"], 3000)
+        self.assertEqual(res.data["dividends_foreign"], {"USドル": 0.39})
+        # 累計 (全期間)
+        self.assertEqual(res.data["all_time"]["realized"], 5000)
+        self.assertEqual(res.data["all_time"]["dividends"], 4000)
+        self.assertEqual(res.data["all_time"]["total"], 9000)
+        self.assertEqual(res.data["all_time"]["dividends_foreign"], {"USドル": 0.39})
+        self.assertEqual(res.data["years"], [2025, 2026])
+
     def test_other_users_data_invisible(self):
         other = get_user_model().objects.create_user("hanako", password="pass12345")
         make_trade(other)
@@ -384,6 +427,35 @@ class DividendApiTests(APITestCase):
         self.assertEqual(res.data["imported"], 0)
         self.assertEqual(res.data["skipped_manual"], 1)
         self.assertEqual(Dividend.objects.filter(user=self.user).count(), 1)
+
+    def test_import_foreign_currency(self):
+        # 米国株: 外国源泉徴収があるため 税引前 - 税額 ≠ 受取額 でも取り込める
+        rows = [
+            {
+                "received_date": "2026-06-16",
+                "code": "PFE",
+                "name": "PFIZER INC.",
+                "currency": "USドル",
+                "shares": 1,
+                "gross_amount": 0.43,
+                "amount": 0.39,
+                "memo": "NISA成長投資枠",
+            }
+        ]
+        res = self.client.post(
+            "/api/stocks/import/dividends/", {"dividends": rows}, format="json"
+        )
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.data["imported"], 1)
+        d = Dividend.objects.get(user=self.user, code="PFE")
+        self.assertEqual(d.currency, "USドル")
+        self.assertEqual(d.amount, Decimal("0.39"))
+        # 再取込 → スキップ
+        res = self.client.post(
+            "/api/stocks/import/dividends/", {"dividends": rows}, format="json"
+        )
+        self.assertEqual(res.data["imported"], 0)
+        self.assertEqual(res.data["skipped_imported"], 1)
 
     def test_partial_update(self):
         d = Dividend.objects.create(

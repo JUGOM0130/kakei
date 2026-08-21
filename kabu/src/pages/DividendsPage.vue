@@ -1,7 +1,7 @@
 <script setup>
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useStocksStore } from '../stores/stocks'
-import { dateLabel, yen } from '../utils/format'
+import { dateLabel, money, yen } from '../utils/format'
 import { lookupStockName, normalizeCode } from '../utils/stockNames'
 
 const stocks = useStocksStore()
@@ -15,6 +15,7 @@ function emptyForm() {
     received_date: new Date().toLocaleDateString('sv-SE'),
     code: '',
     name: '',
+    currency: '円',
     shares: null,
     gross_amount: null,
     tax_national: null,
@@ -55,8 +56,19 @@ watch(
 const yearTotal = computed(() => {
   const year = String(new Date().getFullYear())
   return stocks.dividends
-    .filter((d) => d.received_date.startsWith(year))
+    .filter((d) => d.received_date.startsWith(year) && (!d.currency || d.currency === '円'))
     .reduce((sum, d) => sum + d.amount, 0)
+})
+
+// 外貨建て配当の今年の合計 (通貨別)。円と合算できないため別枠で表示する
+const yearForeignTotals = computed(() => {
+  const year = String(new Date().getFullYear())
+  const map = new Map()
+  for (const d of stocks.dividends) {
+    if (!d.received_date.startsWith(year) || !d.currency || d.currency === '円') continue
+    map.set(d.currency, (map.get(d.currency) || 0) + d.amount)
+  }
+  return [...map.entries()]
 })
 
 function numOrNull(v) {
@@ -71,6 +83,7 @@ async function submit() {
       received_date: form.value.received_date,
       code: normalizeCode(form.value.code),
       name: form.value.name,
+      currency: form.value.currency || '円',
       shares: numOrNull(form.value.shares),
       gross_amount: numOrNull(form.value.gross_amount),
       tax_national: numOrNull(form.value.tax_national),
@@ -108,6 +121,7 @@ function fillForm(d) {
     received_date: d.received_date,
     code: d.code,
     name: d.name,
+    currency: d.currency || '円',
     shares: d.shares,
     gross_amount: d.gross_amount,
     tax_national: d.tax_national,
@@ -134,7 +148,7 @@ function startEdit(d) {
 }
 
 async function remove(d) {
-  if (!confirm(`${d.name} の配当 ${yen(d.amount)} を削除しますか?`)) return
+  if (!confirm(`${d.name} の配当 ${money(d.amount, d.currency)} を削除しますか?`)) return
   await stocks.deleteDividend(d.id)
   if (editingId.value === d.id) resetForm()
 }
@@ -155,7 +169,12 @@ onMounted(async () => {
 
     <div class="card total-card">
       <span class="label">今年の受取合計 (税引後)</span>
-      <span class="value">{{ yen(yearTotal) }}</span>
+      <span class="value-wrap">
+        <span class="value">{{ yen(yearTotal) }}</span>
+        <span v-for="[cur, total] in yearForeignTotals" :key="cur" class="foreign">
+          + {{ money(total, cur) }}
+        </span>
+      </span>
     </div>
 
     <form class="card" @submit.prevent="submit">
@@ -177,22 +196,36 @@ onMounted(async () => {
           <input id="name" v-model="form.name" type="text" required />
         </div>
       </div>
-      <label for="shares">配当対象株数 (任意)</label>
-      <input id="shares" v-model.number="form.shares" type="number" min="1" />
-      <label for="gross_amount">配当金 (税引前・円) — NISAなど非課税なら空欄でOK</label>
-      <input id="gross_amount" v-model.number="form.gross_amount" type="number" min="0" />
       <div class="two-col">
         <div>
-          <label for="tax_national">源泉徴収 国税 (円)</label>
-          <input id="tax_national" v-model.number="form.tax_national" type="number" min="0" />
+          <label for="shares">配当対象株数 (任意)</label>
+          <input id="shares" v-model.number="form.shares" type="number" min="1" />
         </div>
         <div>
-          <label for="tax_local">源泉徴収 地方税 (円)</label>
-          <input id="tax_local" v-model.number="form.tax_local" type="number" min="0" />
+          <label for="currency">受取通貨</label>
+          <select id="currency" v-model="form.currency">
+            <option value="円">円</option>
+            <option value="USドル">USドル</option>
+            <option v-if="form.currency !== '円' && form.currency !== 'USドル'" :value="form.currency">
+              {{ form.currency }}
+            </option>
+          </select>
         </div>
       </div>
-      <label for="amount">受取額 (税引後・円) — 税引前を入れると自動計算</label>
-      <input id="amount" v-model.number="form.amount" type="number" min="0" required />
+      <label for="gross_amount">配当金 (税引前) — NISAなど非課税なら空欄でOK</label>
+      <input id="gross_amount" v-model.number="form.gross_amount" type="number" min="0" step="any" />
+      <div class="two-col">
+        <div>
+          <label for="tax_national">源泉徴収 国税</label>
+          <input id="tax_national" v-model.number="form.tax_national" type="number" min="0" step="any" />
+        </div>
+        <div>
+          <label for="tax_local">源泉徴収 地方税</label>
+          <input id="tax_local" v-model.number="form.tax_local" type="number" min="0" step="any" />
+        </div>
+      </div>
+      <label for="amount">受取額 (税引後) — 税引前を入れると自動計算</label>
+      <input id="amount" v-model.number="form.amount" type="number" min="0" step="any" required />
       <label for="memo">メモ (任意)</label>
       <input id="memo" v-model="form.memo" type="text" />
       <p v-if="error" class="error-message">{{ error }}</p>
@@ -223,16 +256,16 @@ onMounted(async () => {
             <span v-if="d.shares" class="shares">{{ d.shares }}株</span>
           </div>
           <p v-if="d.gross_amount != null" class="tax-detail">
-            税引前 {{ yen(d.gross_amount) }}
+            税引前 {{ money(d.gross_amount, d.currency) }}
             <template v-if="taxTotal(d) > 0">
-              / 源泉 {{ yen(taxTotal(d)) }} (国税 {{ yen(d.tax_national || 0) }}・地方税
-              {{ yen(d.tax_local || 0) }})
+              / 源泉 {{ money(taxTotal(d), d.currency) }}<template v-if="d.tax_local">
+                (国税 {{ yen(d.tax_national || 0) }}・地方税 {{ yen(d.tax_local || 0) }})</template>
             </template>
           </p>
           <p v-if="d.memo" class="memo">{{ d.memo }}</p>
         </div>
         <div class="right">
-          <span class="amount">{{ yen(d.amount) }}</span>
+          <span class="amount">{{ money(d.amount, d.currency) }}</span>
           <div class="actions">
             <button class="btn btn-secondary btn-small" @click.stop="startEdit(d)">編集</button>
             <button class="btn btn-secondary btn-small" @click.stop="remove(d)">削除</button>
@@ -255,9 +288,20 @@ onMounted(async () => {
   color: var(--color-text-sub);
 }
 
+.total-card .value-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+}
+
 .total-card .value {
   font-size: 1.4rem;
   font-weight: 700;
+}
+
+.total-card .foreign {
+  font-size: 0.85rem;
+  color: var(--color-text-sub);
 }
 
 .two-col {

@@ -2,7 +2,7 @@
 import { computed, onMounted } from 'vue'
 import { useAuthStore } from '../stores/auth'
 import { useStocksStore } from '../stores/stocks'
-import { signedYen, pnlClass, yen } from '../utils/format'
+import { money, signedYen, pnlClass, yen } from '../utils/format'
 import MonthlyBar from '../components/MonthlyBar.vue'
 
 const auth = useAuthStore()
@@ -90,6 +90,41 @@ onMounted(() => {
             <span>{{ yen(stocks.summary.dividends) }}</span>
           </div>
         </div>
+        <p v-if="Object.keys(stocks.summary.dividends_foreign || {}).length" class="foreign-note">
+          外貨配当:
+          <template v-for="(total, cur, i) in stocks.summary.dividends_foreign" :key="cur">
+            <template v-if="i > 0">・</template>{{ money(total, cur) }}
+          </template>
+        </p>
+      </div>
+
+      <div v-if="stocks.summary.all_time" class="card alltime-card">
+        <div class="alltime-row">
+          <span class="bd-label">累計トータル (全期間)</span>
+          <span class="alltime-value" :class="pnlClass(stocks.summary.all_time.total)">
+            {{ signedYen(stocks.summary.all_time.total) }}
+          </span>
+        </div>
+        <div class="alltime-breakdown">
+          <span>
+            <span class="bd-label">実現損益</span>
+            <span :class="pnlClass(stocks.summary.all_time.realized)">{{
+              signedYen(stocks.summary.all_time.realized)
+            }}</span>
+          </span>
+          <span>
+            <span class="bd-label">配当</span>
+            <span>{{ yen(stocks.summary.all_time.dividends) }}</span>
+          </span>
+          <span
+            v-for="(total, cur) in stocks.summary.all_time.dividends_foreign"
+            :key="cur"
+          >
+            <span class="bd-label">配当 ({{ cur }})</span>
+            <span>{{ money(total, cur) }}</span>
+          </span>
+        </div>
+        <RouterLink to="/analysis" class="analysis-link">📈 利回り・元本の分析を見る</RouterLink>
       </div>
 
       <div class="card">
@@ -199,6 +234,45 @@ onMounted(() => {
   color: var(--color-text-sub);
   margin-right: 6px;
   font-size: 0.8rem;
+}
+
+.foreign-note {
+  margin-top: 8px;
+  font-size: 0.85rem;
+  color: var(--color-text-sub);
+}
+
+.alltime-card {
+  padding: 12px 16px;
+}
+
+.alltime-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.alltime-value {
+  font-size: 1.2rem;
+  font-weight: 700;
+}
+
+.alltime-breakdown {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 4px 16px;
+  font-size: 0.85rem;
+  margin-top: 4px;
+}
+
+.analysis-link {
+  display: block;
+  text-align: right;
+  font-size: 0.85rem;
+  color: var(--color-primary);
+  text-decoration: none;
+  margin-top: 8px;
 }
 
 .card-title {
