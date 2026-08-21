@@ -1,6 +1,8 @@
+from django.db.models import Sum
 from rest_framework import serializers
 
 from .models import (
+    AccountBalance,
     Category,
     GroupMember,
     PaymentMethod,
@@ -33,6 +35,29 @@ class UserPaymentMethodField(serializers.PrimaryKeyRelatedField):
         return PaymentMethod.objects.filter(user=self.context["request"].user)
 
 
+class UserParentTransactionField(serializers.PrimaryKeyRelatedField):
+    """内訳の親: 自分の親レベル取引のみ (孫は構造上作れない)。"""
+
+    def get_queryset(self):
+        return Transaction.objects.filter(
+            user=self.context["request"].user, parent__isnull=True
+        )
+
+
+class TransactionItemSerializer(serializers.ModelSerializer):
+    """内訳行のネスト表示用"""
+
+    category = CategorySerializer(read_only=True)
+    is_shared = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Transaction
+        fields = ["id", "amount", "memo", "category", "is_shared", "payer_share_percent"]
+
+    def get_is_shared(self, obj):
+        return obj.group_id is not None
+
+
 class TransactionSerializer(serializers.ModelSerializer):
     category = CategorySerializer(read_only=True)
     category_id = UserCategoryField(source="category", write_only=True)
@@ -40,6 +65,8 @@ class TransactionSerializer(serializers.ModelSerializer):
     payment_method_id = UserPaymentMethodField(
         source="payment_method", write_only=True, required=False, allow_null=True
     )
+    parent = UserParentTransactionField(required=False, allow_null=True)
+    items = TransactionItemSerializer(many=True, read_only=True)
     # 共有支払い: shared=true で自分のグループに共有される
     shared = serializers.BooleanField(write_only=True, required=False)
     payer_share_percent = serializers.IntegerField(
@@ -60,6 +87,8 @@ class TransactionSerializer(serializers.ModelSerializer):
             "category_id",
             "payment_method",
             "payment_method_id",
+            "parent",
+            "items",
             "shared",
             "is_shared",
             "payer_share_percent",
@@ -70,6 +99,7 @@ class TransactionSerializer(serializers.ModelSerializer):
             "updated_at",
         ]
         read_only_fields = ["recurring_payment", "created_at", "updated_at"]
+        extra_kwargs = {"date": {"required": False}}
 
     def get_payer(self, obj):
         return {"id": obj.user_id, "username": obj.user.username}
@@ -81,31 +111,86 @@ class TransactionSerializer(serializers.ModelSerializer):
         return obj.group_id is not None
 
     def validate(self, attrs):
+        # --- 共有指定の解決 ---
         shared = attrs.pop("shared", None)
-        if shared is None:
-            return attrs
-        if shared:
-            member = (
-                GroupMember.objects.filter(user=self.context["request"].user)
-                .select_related("group")
-                .first()
-            )
-            if member is None:
-                raise serializers.ValidationError(
-                    {"shared": "グループに参加していないため共有できません。"}
+        if shared is not None:
+            if shared:
+                member = (
+                    GroupMember.objects.filter(user=self.context["request"].user)
+                    .select_related("group")
+                    .first()
                 )
-            attrs["group"] = member.group
-            if attrs.get("payer_share_percent") is None:
-                attrs["payer_share_percent"] = member.share_percent
+                if member is None:
+                    raise serializers.ValidationError(
+                        {"shared": "グループに参加していないため共有できません。"}
+                    )
+                attrs["group"] = member.group
+                if attrs.get("payer_share_percent") is None:
+                    attrs["payer_share_percent"] = member.share_percent
+            else:
+                attrs["group"] = None
+                attrs["payer_share_percent"] = None
+
+        # --- 親子 (カード内訳) の検証 ---
+        parent = attrs.get("parent", getattr(self.instance, "parent", None))
+        if parent is not None:
+            category = attrs.get("category", getattr(self.instance, "category", None))
+            if parent.category.type != Category.Type.EXPENSE or (
+                category and category.type != Category.Type.EXPENSE
+            ):
+                raise serializers.ValidationError(
+                    {"parent": "内訳は支出の取引にのみ追加できます。"}
+                )
+            if self.instance and self.instance.items.exists():
+                raise serializers.ValidationError(
+                    {"parent": "内訳を持つ取引を内訳行にはできません。"}
+                )
+            if attrs.get("payment_method") is not None:
+                raise serializers.ValidationError(
+                    {"payment_method_id": "内訳行に支払方法は設定できません (親に含まれます)。"}
+                )
+            # 内訳合計 ≤ 親金額
+            amount = attrs.get("amount", getattr(self.instance, "amount", 0))
+            siblings = parent.items.all()
+            if self.instance:
+                siblings = siblings.exclude(pk=self.instance.pk)
+            used = siblings.aggregate(total=Sum("amount"))["total"] or 0
+            if used + amount > parent.amount:
+                raise serializers.ValidationError(
+                    {
+                        "amount": f"内訳の合計が親の金額 (¥{parent.amount:,}) を超えます "
+                        f"(残り ¥{parent.amount - used:,})。"
+                    }
+                )
+            # 日付は常に親と同じ
+            attrs["date"] = parent.date
         else:
-            attrs["group"] = None
-            attrs["payer_share_percent"] = None
+            if not attrs.get("date", getattr(self.instance, "date", None)):
+                raise serializers.ValidationError({"date": "日付を入力してください。"})
+
+        # 内訳を持つ親は本体を共有できない (共有は内訳行で行う)
+        has_items = self.instance is not None and self.instance.items.exists()
+        if has_items:
+            if attrs.get("group") is not None:
+                raise serializers.ValidationError(
+                    {"shared": "内訳がある取引は本体を共有できません。内訳行ごとに共有してください。"}
+                )
+            new_amount = attrs.get("amount", self.instance.amount)
+            items_total = self.instance.items.aggregate(total=Sum("amount"))["total"] or 0
+            if new_amount < items_total:
+                raise serializers.ValidationError(
+                    {"amount": f"内訳の合計 (¥{items_total:,}) を下回る金額にはできません。"}
+                )
         return attrs
 
 
 class RecurringPaymentSerializer(serializers.ModelSerializer):
     category = CategorySerializer(read_only=True)
     category_id = UserCategoryField(source="category", write_only=True)
+    payment_method = PaymentMethodSerializer(read_only=True)
+    payment_method_id = UserPaymentMethodField(
+        source="payment_method", write_only=True, required=False, allow_null=True
+    )
 
     class Meta:
         model = RecurringPayment
@@ -115,6 +200,8 @@ class RecurringPaymentSerializer(serializers.ModelSerializer):
             "amount",
             "category",
             "category_id",
+            "payment_method",
+            "payment_method_id",
             "day_of_month",
             "interval_months",
             "anchor_month",
@@ -142,6 +229,13 @@ class RecurringPaymentSerializer(serializers.ModelSerializer):
                     {"is_shared": "グループに参加していないため共有できません。"}
                 )
         return attrs
+
+
+class AccountBalanceSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = AccountBalance
+        fields = ["amount", "as_of_date", "updated_at"]
+        read_only_fields = ["updated_at"]
 
 
 class PaySerializer(serializers.Serializer):

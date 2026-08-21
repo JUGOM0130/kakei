@@ -357,6 +357,159 @@ class RecurringIntervalTests(BaseTestCase):
         self.assertEqual(res.status_code, 400)
 
 
+class CardBreakdownTests(BaseTestCase):
+    """カード請求の親子取引 (内訳) のテスト"""
+
+    def setUp(self):
+        super().setUp()
+        self.group = Group.objects.create(name="我が家", invite_code="ABCD1234")
+        GroupMember.objects.create(group=self.group, user=self.alice, share_percent=50)
+        GroupMember.objects.create(group=self.group, user=self.bob, share_percent=50)
+        self.alice_daily = Category.objects.get(user=self.alice, name="日用品")
+        self.alice_fun = Category.objects.get(user=self.alice, name="娯楽")
+
+    def _create_parent_with_items(self):
+        self.client.force_login(self.alice)
+        parent = self.client.post(
+            "/api/transactions/",
+            {"category_id": self.alice_fun.id, "amount": 10000, "date": "2026-08-05"},
+            format="json",
+        ).json()
+        r1 = self.client.post(
+            "/api/transactions/",
+            {
+                "parent": parent["id"],
+                "category_id": self.alice_food.id,
+                "amount": 1000,
+                "shared": True,
+            },
+            format="json",
+        )
+        self.assertEqual(r1.status_code, 201)
+        self.assertEqual(r1.json()["date"], "2026-08-05")  # 日付は親から複写
+        r2 = self.client.post(
+            "/api/transactions/",
+            {
+                "parent": parent["id"],
+                "category_id": self.alice_daily.id,
+                "amount": 2000,
+                "shared": True,
+            },
+            format="json",
+        )
+        self.assertEqual(r2.status_code, 201)
+        return parent, r1.json(), r2.json()
+
+    def test_summary_counts_parent_once_and_splits_categories(self):
+        parent, _, _ = self._create_parent_with_items()
+        data = self.client.get("/api/summary/monthly/", {"month": "2026-08"}).json()
+        self.assertEqual(data["expense_total"], 10000)  # 二重計上しない
+        cats = {c["name"]: c["total"] for c in data["expense_by_category"]}
+        self.assertEqual(cats["食費"], 1000)
+        self.assertEqual(cats["日用品"], 2000)
+        self.assertEqual(cats["娯楽"], 7000)  # 残額は親カテゴリ
+        # 共有は内訳の3000だけ (折半 → alice負担1500)
+        self.assertEqual(data["shared"]["total"], 3000)
+        self.assertEqual(data["shared"]["my_paid"], 3000)
+        self.assertEqual(data["shared"]["my_burden"], 1500)
+
+    def test_items_sum_cannot_exceed_parent(self):
+        parent, _, _ = self._create_parent_with_items()
+        res = self.client.post(
+            "/api/transactions/",
+            {"parent": parent["id"], "category_id": self.alice_food.id, "amount": 7001},
+            format="json",
+        )
+        self.assertEqual(res.status_code, 400)
+
+    def test_no_grandchildren(self):
+        parent, item1, _ = self._create_parent_with_items()
+        res = self.client.post(
+            "/api/transactions/",
+            {"parent": item1["id"], "category_id": self.alice_food.id, "amount": 100},
+            format="json",
+        )
+        self.assertEqual(res.status_code, 400)  # 内訳行は親候補に出ない
+
+    def test_parent_with_items_cannot_be_shared(self):
+        parent, _, _ = self._create_parent_with_items()
+        res = self.client.patch(
+            f"/api/transactions/{parent['id']}/", {"shared": True}, format="json"
+        )
+        self.assertEqual(res.status_code, 400)
+
+    def test_partner_sees_shared_items_but_not_parent(self):
+        parent, _, _ = self._create_parent_with_items()
+        self.client.force_login(self.bob)
+        listed = self.client.get("/api/transactions/", {"month": "2026-08"}).json()
+        amounts = sorted(t["amount"] for t in listed)
+        self.assertEqual(amounts, [1000, 2000])  # 親(10000)は見えない
+
+    def test_deleting_parent_removes_items(self):
+        parent, item1, _ = self._create_parent_with_items()
+        self.client.delete(f"/api/transactions/{parent['id']}/")
+        self.assertEqual(
+            self.client.get(f"/api/transactions/{item1['id']}/").status_code, 404
+        )
+
+
+class BalanceTests(BaseTestCase):
+    def test_balance_forecast(self):
+        self.client.force_login(self.alice)
+        # 未登録なら anchor: null
+        data = self.client.get("/api/summary/monthly/", {"month": "2026-08"}).json()
+        self.assertIsNone(data["balance_forecast"]["anchor"])
+
+        res = self.client.put(
+            "/api/balance/", {"amount": 150000, "as_of_date": "2026-08-01"}, format="json"
+        )
+        self.assertEqual(res.status_code, 200)
+
+        # 基準日より後: 収入 +5000, 支出 -3000 / 基準日当日は含めない
+        Transaction.objects.create(
+            user=self.alice, category=self.alice_salary, amount=5000, date="2026-08-02"
+        )
+        Transaction.objects.create(
+            user=self.alice, category=self.alice_food, amount=3000, date="2026-08-03"
+        )
+        Transaction.objects.create(
+            user=self.alice, category=self.alice_food, amount=9999, date="2026-08-01"
+        )
+        # 未払い固定費 48000
+        RecurringPayment.objects.create(
+            user=self.alice,
+            name="家賃",
+            amount=48000,
+            category=self.alice_housing,
+            day_of_month=27,
+        )
+        data = self.client.get("/api/summary/monthly/", {"month": "2026-08"}).json()
+        fc = data["balance_forecast"]
+        self.assertEqual(fc["projected"], 152000)
+        self.assertEqual(fc["unpaid_recurring"], 48000)
+        self.assertEqual(fc["after_required"], 104000)
+
+    def test_balance_ignores_breakdown_items(self):
+        self.client.force_login(self.alice)
+        self.client.put(
+            "/api/balance/", {"amount": 100000, "as_of_date": "2026-08-01"}, format="json"
+        )
+        parent = self.client.post(
+            "/api/transactions/",
+            {"category_id": self.alice_food.id, "amount": 10000, "date": "2026-08-05"},
+            format="json",
+        ).json()
+        self.client.post(
+            "/api/transactions/",
+            {"parent": parent["id"], "category_id": self.alice_food.id, "amount": 4000},
+            format="json",
+        )
+        fc = self.client.get("/api/summary/monthly/", {"month": "2026-08"}).json()[
+            "balance_forecast"
+        ]
+        self.assertEqual(fc["projected"], 90000)  # 内訳を二重に引かない
+
+
 class PaymentMethodTests(BaseTestCase):
     def test_default_payment_method_seeded_and_totals(self):
         self.client.force_login(self.alice)
@@ -392,3 +545,32 @@ class PaymentMethodTests(BaseTestCase):
         ).json()
         self.assertEqual(len(listed), 1)
         self.assertEqual(listed[0]["amount"], 1200)
+
+    def test_recurring_pay_inherits_payment_method(self):
+        self.client.force_login(self.alice)
+        card = self.client.post(
+            "/api/payment-methods/", {"name": "カードB"}, format="json"
+        ).json()
+        rp = self.client.post(
+            "/api/recurring-payments/",
+            {
+                "name": "インターネット",
+                "amount": 5000,
+                "category_id": Category.objects.get(user=self.alice, name="通信").id,
+                "day_of_month": 10,
+                "payment_method_id": card["id"],
+            },
+            format="json",
+        ).json()
+        res = self.client.post(
+            f"/api/recurring-payments/{rp['id']}/pay/", {"month": "2026-08"}, format="json"
+        )
+        self.assertEqual(res.status_code, 201)
+        self.assertEqual(res.json()["payment_method"]["name"], "カードB")
+        totals = {
+            m["name"]: m["total"]
+            for m in self.client.get("/api/summary/monthly/", {"month": "2026-08"}).json()[
+                "payment_methods"
+            ]
+        }
+        self.assertEqual(totals["カードB"], 5000)

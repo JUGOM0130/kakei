@@ -81,6 +81,9 @@ const grouped = computed(() => {
           <div class="info">
             <div class="cat">
               {{ tx.category.name }}
+              <span v-if="tx.items && tx.items.length" class="badge items-badge">
+                内訳{{ tx.items.length }}件
+              </span>
               <span v-if="tx.is_shared" class="badge shared-badge">👥 共有</span>
               <span v-if="!tx.is_mine" class="badge payer-badge">{{ tx.payer.username }}</span>
             </div>
@@ -177,6 +180,12 @@ const grouped = computed(() => {
 }
 
 .payer-badge {
+  background: var(--color-bg);
+  color: var(--color-text-sub);
+  border: 1px solid var(--color-border);
+}
+
+.items-badge {
   background: var(--color-bg);
   color: var(--color-text-sub);
   border: 1px solid var(--color-border);

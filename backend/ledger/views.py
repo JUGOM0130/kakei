@@ -1,6 +1,7 @@
 import calendar
 import re
 import secrets
+from collections import defaultdict
 from datetime import date
 
 from django.db import IntegrityError, transaction
@@ -13,6 +14,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from .models import (
+    AccountBalance,
     Category,
     Group,
     GroupMember,
@@ -22,6 +24,7 @@ from .models import (
     Transaction,
 )
 from .serializers import (
+    AccountBalanceSerializer,
     CategorySerializer,
     GroupCreateSerializer,
     GroupJoinSerializer,
@@ -122,13 +125,21 @@ class TransactionViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         user = self.request.user
-        cond = Q(user=user)
         member = get_membership(user)
-        if member:
-            # グループ共有の記録は相手の分も見える
-            cond |= Q(group=member.group)
-        qs = Transaction.objects.filter(cond).select_related(
-            "category", "user", "payment_method"
+        if self.action == "list":
+            # 一覧: 自分の親レベル取引 + 相手の共有分 (相手の共有内訳行も行として見える)
+            cond = Q(user=user, parent__isnull=True)
+            if member:
+                cond |= Q(group=member.group) & ~Q(user=user)
+        else:
+            # 個別取得/編集: 自分の全取引 (内訳行含む) + 共有分
+            cond = Q(user=user)
+            if member:
+                cond |= Q(group=member.group)
+        qs = (
+            Transaction.objects.filter(cond)
+            .select_related("category", "user", "payment_method")
+            .prefetch_related("items__category")
         )
         params = self.request.query_params
         month = params.get("month")
@@ -152,7 +163,10 @@ class TransactionViewSet(viewsets.ModelViewSet):
     def perform_update(self, serializer):
         if serializer.instance.user_id != self.request.user.id:
             raise PermissionDenied("共有相手の記録は編集できません。")
-        serializer.save()
+        tx = serializer.save()
+        # 親の日付変更は内訳行に追随させる
+        if tx.parent_id is None:
+            tx.items.exclude(date=tx.date).update(date=tx.date)
 
     def perform_destroy(self, instance):
         if instance.user_id != self.request.user.id:
@@ -213,6 +227,7 @@ class RecurringPaymentViewSet(viewsets.ModelViewSet):
             amount=amount,
             date=pay_date,
             memo=rp.name,
+            payment_method=rp.payment_method,
             group=group,
             payer_share_percent=share,
             recurring_payment=rp,
@@ -295,51 +310,78 @@ class MonthlySummaryView(APIView):
         first, last = month_range(month)
         user = request.user
 
-        month_txs = Transaction.objects.filter(user=user, date__range=(first, last))
-        by_category = (
-            month_txs.values(
-                "category_id", "category__name", "category__type", "category__color"
+        # 親子取引 (カード内訳) に対応するため Python 側で集計する。
+        # 合計・支払方法別は親レベルの金額を1回だけ数え、
+        # カテゴリ内訳は内訳行のカテゴリ + 残額を親カテゴリに割り当てる。
+        month_txs = list(
+            Transaction.objects.filter(user=user, date__range=(first, last)).select_related(
+                "category", "payment_method"
             )
-            .annotate(total=Sum("amount"))
-            .order_by("-total")
         )
+        children_by_parent = defaultdict(list)
+        top_txs = []
+        for tx in month_txs:
+            if tx.parent_id:
+                children_by_parent[tx.parent_id].append(tx)
+            else:
+                top_txs.append(tx)
 
         income_total = expense_total = 0
-        income_by_category, expense_by_category = [], []
-        for row in by_category:
-            item = {
-                "category_id": row["category_id"],
-                "name": row["category__name"],
-                "color": row["category__color"],
-                "total": row["total"],
-            }
-            if row["category__type"] == Category.Type.INCOME:
-                income_total += row["total"]
-                income_by_category.append(item)
-            else:
-                expense_total += row["total"]
-                expense_by_category.append(item)
+        category_totals = {}
+        method_totals = {}
 
-        # 支払方法別の支出合計 (カード別の請求予定額)
-        by_method = (
-            month_txs.filter(category__type=Category.Type.EXPENSE)
-            .values("payment_method_id", "payment_method__name")
-            .annotate(total=Sum("amount"))
-            .order_by("-total")
-        )
-        payment_methods = [
-            {
-                "id": row["payment_method_id"],
-                "name": row["payment_method__name"] or "未設定",
-                "total": row["total"],
-            }
-            for row in by_method
-        ]
+        def add_category(category, amount):
+            entry = category_totals.setdefault(
+                category.id,
+                {
+                    "category_id": category.id,
+                    "name": category.name,
+                    "color": category.color,
+                    "type": category.type,
+                    "total": 0,
+                },
+            )
+            entry["total"] += amount
+
+        for tx in top_txs:
+            if tx.category.type == Category.Type.INCOME:
+                income_total += tx.amount
+            else:
+                expense_total += tx.amount
+                method = method_totals.setdefault(
+                    tx.payment_method_id,
+                    {
+                        "id": tx.payment_method_id,
+                        "name": tx.payment_method.name if tx.payment_method else "未設定",
+                        "total": 0,
+                    },
+                )
+                method["total"] += tx.amount
+
+            kids = children_by_parent.get(tx.id, [])
+            if kids:
+                remainder = tx.amount
+                for child in kids:
+                    add_category(child.category, child.amount)
+                    remainder -= child.amount
+                if remainder > 0:
+                    add_category(tx.category, remainder)
+            else:
+                add_category(tx.category, tx.amount)
+
+        income_by_category, expense_by_category = [], []
+        for entry in sorted(category_totals.values(), key=lambda e: -e["total"]):
+            type_ = entry.pop("type")
+            if type_ == Category.Type.INCOME:
+                income_by_category.append(entry)
+            else:
+                expense_by_category.append(entry)
+
+        payment_methods = sorted(method_totals.values(), key=lambda m: -m["total"])
 
         # 定期支払: その月が支払対象月のものだけを予定として並べる
         paid_txs = {
-            tx.recurring_payment_id: tx
-            for tx in month_txs.filter(recurring_payment__isnull=False)
+            tx.recurring_payment_id: tx for tx in month_txs if tx.recurring_payment_id
         }
         required_total = paid_total = remaining_total = 0
         items = []
@@ -373,6 +415,44 @@ class MonthlySummaryView(APIView):
 
         member = get_membership(user)
 
+        # 口座残高の想定額 (基準残高 + 基準日より後の収支累計 ± 精算)
+        anchor = AccountBalance.objects.filter(user=user).first()
+        if anchor is None:
+            balance_forecast = {"anchor": None}
+        else:
+            rows = (
+                Transaction.objects.filter(
+                    user=user, parent__isnull=True, date__gt=anchor.as_of_date
+                )
+                .values("category__type")
+                .annotate(total=Sum("amount"))
+            )
+            income_after = expense_after = 0
+            for row in rows:
+                if row["category__type"] == Category.Type.INCOME:
+                    income_after = row["total"]
+                else:
+                    expense_after = row["total"]
+            received = (
+                Settlement.objects.filter(
+                    to_user=user, created_at__date__gt=anchor.as_of_date
+                ).aggregate(total=Sum("amount"))["total"]
+                or 0
+            )
+            paid_out = (
+                Settlement.objects.filter(
+                    from_user=user, created_at__date__gt=anchor.as_of_date
+                ).aggregate(total=Sum("amount"))["total"]
+                or 0
+            )
+            projected = anchor.amount + income_after - expense_after + received - paid_out
+            balance_forecast = {
+                "anchor": {"amount": anchor.amount, "as_of_date": str(anchor.as_of_date)},
+                "projected": projected,
+                "unpaid_recurring": remaining_total,
+                "after_required": projected - remaining_total,
+            }
+
         return Response(
             {
                 "month": month,
@@ -389,8 +469,27 @@ class MonthlySummaryView(APIView):
                     "items": items,
                 },
                 "shared": build_shared_summary(user, member, first, last),
+                "balance_forecast": balance_forecast,
             }
         )
+
+
+class BalanceView(APIView):
+    """口座残高 (基準残高) の取得・登録"""
+
+    def get(self, request):
+        balance = AccountBalance.objects.filter(user=request.user).first()
+        return Response(
+            {"balance": AccountBalanceSerializer(balance).data if balance else None}
+        )
+
+    def put(self, request):
+        serializer = AccountBalanceSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        AccountBalance.objects.update_or_create(
+            user=request.user, defaults=serializer.validated_data
+        )
+        return Response({"detail": "更新しました。"})
 
 
 class GroupView(APIView):

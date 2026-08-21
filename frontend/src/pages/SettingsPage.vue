@@ -22,12 +22,43 @@ const shareSaved = ref(false)
 const newMethod = ref('')
 const methodError = ref('')
 
+const balanceAmount = ref('')
+const balanceDate = ref(new Date().toISOString().slice(0, 10))
+const balanceSaved = ref(false)
+const balanceError = ref('')
+
 const partner = computed(() => groupStore.partner)
 
 onMounted(async () => {
-  await Promise.all([groupStore.fetch(), ledger.fetchPaymentMethods(true)])
+  const [, , balanceRes] = await Promise.all([
+    groupStore.fetch(),
+    ledger.fetchPaymentMethods(true),
+    api.get('/balance/'),
+  ])
   if (groupStore.me) myShare.value = groupStore.me.share_percent
+  if (balanceRes.data.balance) {
+    balanceAmount.value = String(balanceRes.data.balance.amount)
+    balanceDate.value = balanceRes.data.balance.as_of_date
+  }
 })
+
+async function saveBalance() {
+  balanceError.value = ''
+  if (balanceAmount.value === '' || !balanceDate.value) {
+    balanceError.value = '金額と基準日を入力してください。'
+    return
+  }
+  try {
+    await api.put('/balance/', {
+      amount: Number(balanceAmount.value),
+      as_of_date: balanceDate.value,
+    })
+    balanceSaved.value = true
+    setTimeout(() => (balanceSaved.value = false), 1500)
+  } catch (e) {
+    balanceError.value = e.response?.data?.detail || '保存に失敗しました。'
+  }
+}
 
 async function createGroup() {
   groupError.value = ''
@@ -177,6 +208,30 @@ async function logout() {
       </template>
     </div>
 
+    <!-- 口座残高 -->
+    <h2 class="section-label">口座残高</h2>
+    <div class="card">
+      <label for="bal-amount">残高 (円)</label>
+      <input
+        id="bal-amount"
+        v-model="balanceAmount"
+        type="text"
+        inputmode="numeric"
+        pattern="[0-9]*"
+        placeholder="例: 150000"
+        @input="balanceAmount = balanceAmount.replace(/[^0-9]/g, '')"
+      />
+      <label for="bal-date">基準日</label>
+      <input id="bal-date" v-model="balanceDate" type="date" />
+      <p class="hint">
+        基準日までの記録を反映した現在の残高を入力してください。以降は収支の記録から自動で繰越計算されます。ズレてきたら登録し直せば補正されます。
+      </p>
+      <p v-if="balanceError" class="error-message">{{ balanceError }}</p>
+      <button class="btn save-balance" @click="saveBalance">
+        {{ balanceSaved ? '保存済' : '保存' }}
+      </button>
+    </div>
+
     <!-- 支払方法 -->
     <h2 class="section-label">支払方法 (現金・カード)</h2>
     <div class="card">
@@ -305,5 +360,9 @@ async function logout() {
 
 .logout {
   margin-top: 16px;
+}
+
+.save-balance {
+  margin-top: 12px;
 }
 </style>

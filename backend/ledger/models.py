@@ -103,6 +103,13 @@ class RecurringPayment(models.Model):
     day_of_month = models.PositiveSmallIntegerField(
         "支払日", validators=[MinValueValidator(1), MaxValueValidator(31)]
     )
+    payment_method = models.ForeignKey(
+        PaymentMethod,
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="recurring_payments",
+    )
     interval_months = models.PositiveSmallIntegerField(
         "間隔", default=1, choices=INTERVAL_CHOICES
     )
@@ -142,6 +149,11 @@ class Transaction(models.Model):
     amount = models.PositiveIntegerField("金額")  # 整数円。収支の別は category.type
     date = models.DateField("日付", db_index=True)
     memo = models.CharField("メモ", max_length=200, blank=True, default="")
+    # カード請求などの内訳行: 親を持つ。集計では親の金額を1回だけ数え、
+    # カテゴリ内訳・共有計算のときだけ内訳行を使う。孫は禁止 (serializer で検証)。
+    parent = models.ForeignKey(
+        "self", null=True, blank=True, on_delete=models.CASCADE, related_name="items"
+    )
     payment_method = models.ForeignKey(
         PaymentMethod,
         null=True,
@@ -173,6 +185,20 @@ class Transaction(models.Model):
 
     def __str__(self):
         return f"{self.date} {self.category.name} ¥{self.amount}"
+
+
+class AccountBalance(models.Model):
+    """基準となる口座残高。想定残高 = amount + as_of_date より後の収支累計 ± 精算。"""
+
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="account_balance"
+    )
+    amount = models.PositiveIntegerField("残高")
+    as_of_date = models.DateField("基準日")
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"{self.user.username} ¥{self.amount} ({self.as_of_date})"
 
 
 class Settlement(models.Model):

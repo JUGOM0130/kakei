@@ -23,6 +23,7 @@ const editing = ref(null) // null=閉じる, 'new'=新規, number=編集中ID
 const name = ref('')
 const amount = ref('')
 const categoryId = ref(null)
+const paymentMethodId = ref(null)
 const dayOfMonth = ref(1)
 const intervalMonths = ref(1)
 const anchorMonth = ref(dayjs().format('YYYY-MM'))
@@ -52,6 +53,7 @@ onMounted(async () => {
   await Promise.all([
     ledger.fetchCategories(),
     ledger.fetchRecurring(),
+    ledger.fetchPaymentMethods(),
     groupStore.loaded ? Promise.resolve() : groupStore.fetch(),
   ])
   if (groupStore.me) sharePercent.value = groupStore.me.share_percent
@@ -62,6 +64,7 @@ function openNew() {
   name.value = ''
   amount.value = ''
   categoryId.value = expenseCategories.value[0]?.id ?? null
+  paymentMethodId.value = null
   dayOfMonth.value = 1
   intervalMonths.value = 1
   anchorMonth.value = dayjs().format('YYYY-MM')
@@ -76,6 +79,7 @@ function openEdit(item) {
   name.value = item.name
   amount.value = String(item.amount)
   categoryId.value = item.category.id
+  paymentMethodId.value = item.payment_method?.id ?? null
   dayOfMonth.value = item.day_of_month
   intervalMonths.value = item.interval_months
   anchorMonth.value = item.anchor_month
@@ -97,6 +101,7 @@ async function save() {
     name: name.value,
     amount: Number(amount.value),
     category_id: categoryId.value,
+    payment_method_id: paymentMethodId.value,
     day_of_month: Number(dayOfMonth.value),
     interval_months: Number(intervalMonths.value),
     anchor_month: Number(intervalMonths.value) > 1 ? anchorMonth.value + '-01' : null,
@@ -150,6 +155,14 @@ async function remove(item) {
       <label for="rp-category">カテゴリ</label>
       <select id="rp-category" v-model="categoryId">
         <option v-for="c in expenseCategories" :key="c.id" :value="c.id">{{ c.name }}</option>
+      </select>
+
+      <label for="rp-method">支払方法 (任意。カード払いの固定費に)</label>
+      <select id="rp-method" v-model="paymentMethodId">
+        <option :value="null">未設定</option>
+        <option v-for="m in ledger.paymentMethods" :key="m.id" :value="m.id">
+          {{ m.name }}
+        </option>
       </select>
 
       <label for="rp-interval">支払間隔</label>
@@ -215,7 +228,8 @@ async function remove(item) {
           <span v-if="item.is_shared" class="badge">👥</span>
         </div>
         <div class="sub">
-          {{ intervalLabel(item) }} {{ item.day_of_month }}日 ・ {{ item.category.name }}
+          {{ intervalLabel(item) }} {{ item.day_of_month }}日 ・ {{ item.category.name
+          }}{{ item.payment_method ? ` ・ ${item.payment_method.name}` : '' }}
         </div>
       </div>
       <div class="amount">{{ yen(item.amount) }}</div>

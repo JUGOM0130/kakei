@@ -13,6 +13,7 @@ router.register(
 
 urlpatterns = [
     path("summary/monthly/", views.MonthlySummaryView.as_view()),
+    path("balance/", views.BalanceView.as_view()),
     path("group/", views.GroupView.as_view()),
     path("group/join/", views.GroupJoinView.as_view()),
     path("group/leave/", views.GroupLeaveView.as_view()),

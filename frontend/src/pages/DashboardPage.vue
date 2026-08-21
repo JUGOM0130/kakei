@@ -8,6 +8,7 @@ import CategoryPie from '../components/CategoryPie.vue'
 import RecurringChecklist from '../components/RecurringChecklist.vue'
 import SharedCard from '../components/SharedCard.vue'
 import PaymentMethodTotals from '../components/PaymentMethodTotals.vue'
+import BalanceCard from '../components/BalanceCard.vue'
 
 const ledger = useLedgerStore()
 
@@ -42,6 +43,7 @@ async function onUnsettle(id) {
     <MonthPicker />
     <template v-if="ledger.summary">
       <MinimumRequiredCard :recurring="ledger.summary.recurring" />
+      <BalanceCard :forecast="ledger.summary.balance_forecast" />
       <SummaryCard
         :income="ledger.summary.income_total"
         :expense="ledger.summary.expense_total"
