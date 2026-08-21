@@ -7,6 +7,11 @@ import { yen, dateLabel } from '../utils/format'
 const ledger = useLedgerStore()
 const typeFilter = ref('') // '' | 'income' | 'expense'
 const methodFilter = ref('') // '' | payment method id
+// 表示モード: 'list' = 新しい順 / 'calendar' = 日付順 (1日→末日、日毎)
+const viewMode = ref(localStorage.getItem('kakei-tx-view') || 'list')
+watch(viewMode, (v) => localStorage.setItem('kakei-tx-view', v))
+
+const WEEKDAYS = ['日', '月', '火', '水', '木', '金', '土']
 
 function load() {
   const params = {}
@@ -29,6 +34,30 @@ const grouped = computed(() => {
     map.get(tx.date).push(tx)
   }
   return [...map.entries()]
+})
+
+// カレンダー表示: 月の 1日〜末日を上から順に、日毎の記録と合計を並べる
+const calendarDays = computed(() => {
+  const [y, m] = ledger.month.split('-').map(Number)
+  const daysInMonth = new Date(y, m, 0).getDate()
+  const byDay = new Map()
+  for (const tx of ledger.transactions) {
+    const d = Number(tx.date.slice(8, 10))
+    if (!byDay.has(d)) byDay.set(d, [])
+    byDay.get(d).push(tx)
+  }
+  const days = []
+  for (let d = 1; d <= daysInMonth; d++) {
+    const txs = byDay.get(d) ?? []
+    let expense = 0
+    let income = 0
+    for (const tx of txs) {
+      if (tx.category.type === 'income') income += tx.amount
+      else expense += tx.amount
+    }
+    days.push({ day: d, week: new Date(y, m - 1, d).getDay(), txs, expense, income })
+  }
+  return days
 })
 </script>
 
@@ -65,45 +94,111 @@ const grouped = computed(() => {
           {{ m.name }}
         </option>
       </select>
+      <div class="chip-row">
+        <button class="chip" :class="{ active: viewMode === 'list' }" @click="viewMode = 'list'">
+          新しい順
+        </button>
+        <button
+          class="chip"
+          :class="{ active: viewMode === 'calendar' }"
+          @click="viewMode = 'calendar'"
+        >
+          📅 日付順 (1日→末日)
+        </button>
+      </div>
     </div>
 
-    <p v-if="!ledger.transactions.length" class="empty-message">今月の記録はまだありません。</p>
-
-    <section v-for="[date, txs] in grouped" :key="date" class="day-group">
-      <h2 class="day-label">{{ dateLabel(date) }}</h2>
-      <div class="card day-card">
-        <component
-          :is="tx.is_mine ? 'RouterLink' : 'div'"
-          v-for="tx in txs"
-          :key="tx.id"
-          :to="tx.is_mine ? `/transactions/${tx.id}/edit` : undefined"
-          class="row"
-          :class="{ theirs: !tx.is_mine }"
-        >
-          <span class="dot" :style="{ background: tx.category.color }"></span>
-          <div class="info">
-            <div class="cat">
-              {{ tx.category.name }}
-              <span v-if="tx.items && tx.items.length" class="badge items-badge">
-                内訳{{ tx.items.length }}件
-              </span>
-              <span v-if="tx.is_shared" class="badge shared-badge">👥 共有</span>
-              <span v-if="!tx.is_mine" class="badge payer-badge">{{ tx.payer.username }}</span>
-            </div>
-            <div class="sub">
-              <span v-if="tx.payment_method">{{ tx.payment_method.name }}</span>
-              <span v-if="tx.memo">{{ tx.memo }}</span>
-            </div>
-          </div>
-          <span
-            class="amount"
-            :class="tx.category.type === 'income' ? 'amount-income' : 'amount-expense'"
+    <!-- 新しい順 (記録のある日だけ) -->
+    <template v-if="viewMode === 'list'">
+      <p v-if="!ledger.transactions.length" class="empty-message">今月の記録はまだありません。</p>
+      <section v-for="[date, txs] in grouped" :key="date" class="day-group">
+        <h2 class="day-label">{{ dateLabel(date) }}</h2>
+        <div class="card day-card">
+          <component
+            :is="tx.is_mine ? 'RouterLink' : 'div'"
+            v-for="tx in txs"
+            :key="tx.id"
+            :to="tx.is_mine ? `/transactions/${tx.id}/edit` : undefined"
+            class="row"
+            :class="{ theirs: !tx.is_mine }"
           >
-            {{ tx.category.type === 'income' ? '+' : '-' }}{{ yen(tx.amount) }}
+            <span class="dot" :style="{ background: tx.category.color }"></span>
+            <div class="info">
+              <div class="cat">
+                {{ tx.category.name }}
+                <span v-if="tx.items && tx.items.length" class="badge items-badge">
+                  内訳{{ tx.items.length }}件
+                </span>
+                <span v-if="tx.is_shared" class="badge shared-badge">👥 共有</span>
+                <span v-if="!tx.is_mine" class="badge payer-badge">{{ tx.payer.username }}</span>
+              </div>
+              <div class="sub">
+                <span v-if="tx.payment_method">{{ tx.payment_method.name }}</span>
+                <span v-if="tx.memo">{{ tx.memo }}</span>
+              </div>
+            </div>
+            <span
+              class="amount"
+              :class="tx.category.type === 'income' ? 'amount-income' : 'amount-expense'"
+            >
+              {{ tx.category.type === 'income' ? '+' : '-' }}{{ yen(tx.amount) }}
+            </span>
+          </component>
+        </div>
+      </section>
+    </template>
+
+    <!-- 日付順カレンダー (1日〜末日を全部並べる) -->
+    <template v-else>
+      <div
+        v-for="d in calendarDays"
+        :key="d.day"
+        class="cal-day"
+        :class="{ 'cal-empty': !d.txs.length }"
+      >
+        <div class="cal-head">
+          <span class="cal-date" :class="{ sun: d.week === 0, sat: d.week === 6 }">
+            {{ d.day }}日 ({{ WEEKDAYS[d.week] }})
           </span>
-        </component>
+          <span class="cal-totals">
+            <span v-if="d.income" class="amount-income">+{{ yen(d.income) }}</span>
+            <span v-if="d.expense" class="amount-expense">-{{ yen(d.expense) }}</span>
+          </span>
+        </div>
+        <div v-if="d.txs.length" class="card day-card">
+          <component
+            :is="tx.is_mine ? 'RouterLink' : 'div'"
+            v-for="tx in d.txs"
+            :key="tx.id"
+            :to="tx.is_mine ? `/transactions/${tx.id}/edit` : undefined"
+            class="row"
+            :class="{ theirs: !tx.is_mine }"
+          >
+            <span class="dot" :style="{ background: tx.category.color }"></span>
+            <div class="info">
+              <div class="cat">
+                {{ tx.category.name }}
+                <span v-if="tx.items && tx.items.length" class="badge items-badge">
+                  内訳{{ tx.items.length }}件
+                </span>
+                <span v-if="tx.is_shared" class="badge shared-badge">👥 共有</span>
+                <span v-if="!tx.is_mine" class="badge payer-badge">{{ tx.payer.username }}</span>
+              </div>
+              <div class="sub">
+                <span v-if="tx.payment_method">{{ tx.payment_method.name }}</span>
+                <span v-if="tx.memo">{{ tx.memo }}</span>
+              </div>
+            </div>
+            <span
+              class="amount"
+              :class="tx.category.type === 'income' ? 'amount-income' : 'amount-expense'"
+            >
+              {{ tx.category.type === 'income' ? '+' : '-' }}{{ yen(tx.amount) }}
+            </span>
+          </component>
+        </div>
       </div>
-    </section>
+    </template>
   </div>
 </template>
 
@@ -128,6 +223,49 @@ const grouped = computed(() => {
   flex-direction: column;
   gap: 8px;
   margin-bottom: 16px;
+}
+
+.cal-day {
+  margin-bottom: 4px;
+}
+
+.cal-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  padding: 6px 2px 2px;
+}
+
+.cal-date {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--color-text-sub);
+}
+
+.cal-date.sun {
+  color: var(--color-expense);
+}
+
+.cal-date.sat {
+  color: #1565c0;
+}
+
+.cal-empty .cal-head {
+  padding: 3px 2px;
+  border-bottom: 1px dashed var(--color-border);
+}
+
+.cal-empty .cal-date {
+  font-weight: 400;
+  opacity: 0.6;
+  font-size: 0.75rem;
+}
+
+.cal-totals {
+  display: flex;
+  gap: 10px;
+  font-size: 0.85rem;
+  font-variant-numeric: tabular-nums;
 }
 
 .method-select {
