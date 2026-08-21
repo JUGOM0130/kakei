@@ -34,7 +34,10 @@ const grouped = computed(() => {
 
 <template>
   <div class="page">
-    <h1 class="page-title">履歴</h1>
+    <header class="header">
+      <h1 class="page-title">履歴</h1>
+      <RouterLink to="/import" class="btn btn-secondary btn-small">CSV取込</RouterLink>
+    </header>
     <MonthPicker />
     <div class="filters">
       <div class="chip-row">
@@ -105,6 +108,21 @@ const grouped = computed(() => {
 </template>
 
 <style scoped>
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.header .page-title {
+  margin-bottom: 0;
+}
+
+.header .btn {
+  text-decoration: none;
+}
+
 .filters {
   display: flex;
   flex-direction: column;

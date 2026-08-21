@@ -18,6 +18,7 @@ from .models import (
     Category,
     Group,
     GroupMember,
+    MerchantRule,
     PaymentMethod,
     RecurringPayment,
     Settlement,
@@ -29,6 +30,8 @@ from .serializers import (
     GroupCreateSerializer,
     GroupJoinSerializer,
     GroupShareSerializer,
+    ImportSerializer,
+    ImportSuggestSerializer,
     PaymentMethodSerializer,
     PaySerializer,
     RecurringPaymentSerializer,
@@ -471,6 +474,99 @@ class MonthlySummaryView(APIView):
                 "shared": build_shared_summary(user, member, first, last),
                 "balance_forecast": balance_forecast,
             }
+        )
+
+
+class ImportSuggestView(APIView):
+    """CSV取込プレビュー用: 店名ごとの学習済み設定と、二重取込の注意情報を返す"""
+
+    def post(self, request):
+        serializer = ImportSuggestSerializer(
+            data=request.data, context={"request": request}
+        )
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+
+        rules = MerchantRule.objects.filter(
+            user=request.user, merchant__in=data["merchants"]
+        ).select_related("category")
+        suggestions = {
+            rule.merchant: {
+                "category_id": rule.category_id,
+                "shared": rule.shared,
+                "payer_share_percent": rule.payer_share_percent,
+            }
+            for rule in rules
+        }
+
+        existing_statement = False
+        method = data.get("payment_method_id")
+        month = data.get("month")
+        if method and month:
+            first, last = month_range(month)
+            existing_statement = Transaction.objects.filter(
+                user=request.user,
+                parent__isnull=True,
+                payment_method=method,
+                date__range=(first, last),
+                items__isnull=False,
+            ).exists()
+
+        return Response(
+            {"suggestions": suggestions, "existing_statement": existing_statement}
+        )
+
+
+class ImportTransactionsView(APIView):
+    """CSV取込の本体: カード請求(親)+内訳行を一括作成し、店名ルールを学習する"""
+
+    def post(self, request):
+        serializer = ImportSerializer(data=request.data, context={"request": request})
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+
+        member = get_membership(request.user)
+        parent_data = data["parent"]
+
+        with transaction.atomic():
+            parent = Transaction.objects.create(
+                user=request.user,
+                category=parent_data["category_id"],
+                amount=parent_data["amount"],
+                date=parent_data["date"],
+                memo=parent_data.get("memo", ""),
+                payment_method=data["payment_method_id"],
+            )
+            for row in data["rows"]:
+                shared = row["shared"] and member is not None
+                share = None
+                if shared:
+                    share = row.get("payer_share_percent")
+                    if share is None:
+                        share = member.share_percent
+                Transaction.objects.create(
+                    user=request.user,
+                    parent=parent,
+                    category=row["category_id"],
+                    amount=row["amount"],
+                    date=parent.date,
+                    memo=f"{row['used_date'].month}/{row['used_date'].day} {row['merchant']}",
+                    group=member.group if shared else None,
+                    payer_share_percent=share,
+                )
+                MerchantRule.objects.update_or_create(
+                    user=request.user,
+                    merchant=row["merchant"],
+                    defaults={
+                        "category": row["category_id"],
+                        "shared": row["shared"],
+                        "payer_share_percent": row.get("payer_share_percent"),
+                    },
+                )
+
+        return Response(
+            TransactionSerializer(parent, context={"request": request}).data,
+            status=status.HTTP_201_CREATED,
         )
 
 

@@ -187,6 +187,31 @@ class Transaction(models.Model):
         return f"{self.date} {self.category.name} ¥{self.amount}"
 
 
+class MerchantRule(models.Model):
+    """CSV取込の学習ルール: 店名 → カテゴリ/共有設定。取込のたびに上書き学習する。"""
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="merchant_rules"
+    )
+    merchant = models.CharField("店名", max_length=200)
+    category = models.ForeignKey(
+        Category, on_delete=models.CASCADE, related_name="merchant_rules"
+    )
+    shared = models.BooleanField("共有", default=False)
+    payer_share_percent = models.PositiveSmallIntegerField(
+        null=True, blank=True, validators=[MaxValueValidator(100)]
+    )
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["user", "merchant"], name="uniq_user_merchant")
+        ]
+
+    def __str__(self):
+        return f"{self.merchant} → {self.category.name}"
+
+
 class AccountBalance(models.Model):
     """基準となる口座残高。想定残高 = amount + as_of_date より後の収支累計 ± 精算。"""
 

@@ -238,6 +238,59 @@ class AccountBalanceSerializer(serializers.ModelSerializer):
         read_only_fields = ["updated_at"]
 
 
+class ImportRowSerializer(serializers.Serializer):
+    merchant = serializers.CharField(max_length=200)
+    used_date = serializers.DateField()
+    amount = serializers.IntegerField(min_value=1)
+    category_id = UserCategoryField()
+    shared = serializers.BooleanField(default=False)
+    payer_share_percent = serializers.IntegerField(
+        min_value=0, max_value=100, required=False, allow_null=True
+    )
+
+
+class ImportParentSerializer(serializers.Serializer):
+    date = serializers.DateField()
+    amount = serializers.IntegerField(min_value=1)
+    category_id = UserCategoryField()
+    memo = serializers.CharField(
+        max_length=200, required=False, allow_blank=True, default=""
+    )
+
+
+class ImportSerializer(serializers.Serializer):
+    payment_method_id = UserPaymentMethodField()
+    parent = ImportParentSerializer()
+    rows = ImportRowSerializer(many=True)
+
+    def validate(self, attrs):
+        if not attrs["rows"]:
+            raise serializers.ValidationError({"rows": "取込む明細がありません。"})
+        rows_total = sum(r["amount"] for r in attrs["rows"])
+        if rows_total > attrs["parent"]["amount"]:
+            raise serializers.ValidationError(
+                {
+                    "parent": f"明細の合計 (¥{rows_total:,}) が請求合計 "
+                    f"(¥{attrs['parent']['amount']:,}) を超えています。"
+                }
+            )
+        if any(r["shared"] for r in attrs["rows"]):
+            user = self.context["request"].user
+            if not GroupMember.objects.filter(user=user).exists():
+                raise serializers.ValidationError(
+                    {"rows": "グループに参加していないため共有できません。"}
+                )
+        return attrs
+
+
+class ImportSuggestSerializer(serializers.Serializer):
+    merchants = serializers.ListField(
+        child=serializers.CharField(max_length=200), allow_empty=True, max_length=1000
+    )
+    payment_method_id = UserPaymentMethodField(required=False, allow_null=True)
+    month = serializers.RegexField(r"^\d{4}-(0[1-9]|1[0-2])$", required=False)
+
+
 class PaySerializer(serializers.Serializer):
     month = serializers.RegexField(r"^\d{4}-(0[1-9]|1[0-2])$")
     date = serializers.DateField(required=False)

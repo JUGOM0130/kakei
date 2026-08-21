@@ -13,6 +13,7 @@ const router = createRouter({
     { path: '/recurring', name: 'recurring', component: () => import('../pages/RecurringPage.vue') },
     { path: '/categories', name: 'categories', component: () => import('../pages/CategoriesPage.vue') },
     { path: '/settings', name: 'settings', component: () => import('../pages/SettingsPage.vue') },
+    { path: '/import', name: 'import', component: () => import('../pages/ImportPage.vue') },
   ],
 })
 

@@ -453,6 +453,116 @@ class CardBreakdownTests(BaseTestCase):
         )
 
 
+class ImportTests(BaseTestCase):
+    def setUp(self):
+        super().setUp()
+        self.group = Group.objects.create(name="我が家", invite_code="ABCD1234")
+        GroupMember.objects.create(group=self.group, user=self.alice, share_percent=50)
+        GroupMember.objects.create(group=self.group, user=self.bob, share_percent=50)
+        self.client.force_login(self.alice)
+        self.card = self.client.post(
+            "/api/payment-methods/", {"name": "カードA"}, format="json"
+        ).json()
+        self.alice_other = Category.objects.get(
+            user=self.alice, name="その他", type=Category.Type.EXPENSE
+        )
+
+    def _payload(self):
+        return {
+            "payment_method_id": self.card["id"],
+            "parent": {
+                "date": "2026-08-27",
+                "amount": 10000,
+                "category_id": self.alice_other.id,
+                "memo": "8月請求",
+            },
+            "rows": [
+                {
+                    "merchant": "セブンイレブン",
+                    "used_date": "2026-08-03",
+                    "amount": 1000,
+                    "category_id": self.alice_food.id,
+                    "shared": True,
+                },
+                {
+                    "merchant": "Amazon",
+                    "used_date": "2026-08-10",
+                    "amount": 2000,
+                    "category_id": self.alice_other.id,
+                    "shared": False,
+                },
+            ],
+        }
+
+    def test_import_creates_parent_children_and_learns(self):
+        res = self.client.post("/api/import/transactions/", self._payload(), format="json")
+        self.assertEqual(res.status_code, 201)
+        parent = res.json()
+        self.assertEqual(parent["amount"], 10000)
+        self.assertEqual(parent["payment_method"]["name"], "カードA")
+        self.assertEqual(len(parent["items"]), 2)
+        memos = {i["memo"] for i in parent["items"]}
+        self.assertIn("8/3 セブンイレブン", memos)
+        shared_item = next(i for i in parent["items"] if i["memo"].endswith("セブンイレブン"))
+        self.assertTrue(shared_item["is_shared"])
+        self.assertEqual(shared_item["payer_share_percent"], 50)
+
+        # 集計: 親を1回だけ + 共有は1000だけ
+        data = self.client.get("/api/summary/monthly/", {"month": "2026-08"}).json()
+        self.assertEqual(data["expense_total"], 10000)
+        self.assertEqual(data["shared"]["total"], 1000)
+
+        # 学習: suggest が返す + existing_statement
+        res = self.client.post(
+            "/api/import/suggest/",
+            {
+                "merchants": ["セブンイレブン", "Amazon", "未知の店"],
+                "payment_method_id": self.card["id"],
+                "month": "2026-08",
+            },
+            format="json",
+        )
+        data = res.json()
+        self.assertTrue(data["existing_statement"])
+        self.assertEqual(
+            data["suggestions"]["セブンイレブン"]["category_id"], self.alice_food.id
+        )
+        self.assertTrue(data["suggestions"]["セブンイレブン"]["shared"])
+        self.assertFalse(data["suggestions"]["Amazon"]["shared"])
+        self.assertNotIn("未知の店", data["suggestions"])
+
+    def test_import_rows_exceeding_parent_amount(self):
+        payload = self._payload()
+        payload["parent"]["amount"] = 2500
+        res = self.client.post("/api/import/transactions/", payload, format="json")
+        self.assertEqual(res.status_code, 400)
+
+    def test_import_rejects_other_users_category(self):
+        payload = self._payload()
+        payload["rows"][0]["category_id"] = Category.objects.get(
+            user=self.bob, name="食費"
+        ).id
+        res = self.client.post("/api/import/transactions/", payload, format="json")
+        self.assertEqual(res.status_code, 400)
+
+    def test_import_shared_requires_group(self):
+        carol = User.objects.create_user("carol", password="testpass12345")
+        seed_default_categories(carol)
+        self.client.force_login(carol)
+        card = self.client.post(
+            "/api/payment-methods/", {"name": "カードC"}, format="json"
+        ).json()
+        payload = self._payload()
+        payload["payment_method_id"] = card["id"]
+        food = Category.objects.get(user=carol, name="食費")
+        other = Category.objects.get(user=carol, name="その他", type=Category.Type.EXPENSE)
+        payload["parent"]["category_id"] = other.id
+        payload["rows"][0]["category_id"] = food.id
+        payload["rows"][1]["category_id"] = other.id
+        res = self.client.post("/api/import/transactions/", payload, format="json")
+        self.assertEqual(res.status_code, 400)
+
+
 class BalanceTests(BaseTestCase):
     def test_balance_forecast(self):
         self.client.force_login(self.alice)

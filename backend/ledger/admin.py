@@ -4,11 +4,17 @@ from .models import (
     Category,
     Group,
     GroupMember,
+    MerchantRule,
     PaymentMethod,
     RecurringPayment,
     Settlement,
     Transaction,
 )
+
+
+@admin.register(MerchantRule)
+class MerchantRuleAdmin(admin.ModelAdmin):
+    list_display = ["id", "user", "merchant", "category", "shared", "payer_share_percent"]
 
 
 @admin.register(Category)
