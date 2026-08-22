@@ -815,6 +815,164 @@ class BalanceView(APIView):
         return Response({"detail": "更新しました。"})
 
 
+class BurdenView(APIView):
+    """負担詳細: その月に誰が何をいくら払うか (支払済 + 未払い固定費の見込み)。
+
+    自分: 親レベルの支出すべて + 自分の未払い固定費 (対象月のもの)。
+    相手: 見える範囲 = 共有の支払記録 + 相手の「共有」固定費の未払い分。
+    各項目に 元金 / 共有なら割合 / 実質負担 を付ける。
+    """
+
+    def get(self, request):
+        month = request.query_params.get("month")
+        first, last = month_range(month)
+        user = request.user
+        member = get_membership(user)
+        partner_member = None
+        if member:
+            partner_member = (
+                member.group.members.exclude(user=user).select_related("user").first()
+            )
+
+        def tx_entry(tx, mine):
+            """記録済みの支出 1 件 → 項目。実質負担は支払者視点。"""
+            amount = tx.amount
+            if tx.group_id is not None:
+                pct = tx.payer_share_percent if tx.payer_share_percent is not None else 50
+                burden = round_share(amount, pct)
+                shared = True
+            else:
+                pct = None
+                burden = amount
+                shared = False
+            # 共有の内訳行を持つ親: 自分のみ扱いの親でも、内訳の共有分だけ相手が負担する
+            if mine and tx.group_id is None:
+                shared_children = [c for c in tx.items.all() if c.group_id is not None]
+                if shared_children:
+                    others = sum(
+                        c.amount
+                        - round_share(
+                            c.amount,
+                            c.payer_share_percent
+                            if c.payer_share_percent is not None
+                            else 50,
+                        )
+                        for c in shared_children
+                    )
+                    burden = amount - others
+                    shared = True
+            return {
+                "kind": "paid",
+                "date": str(tx.date),
+                "name": tx.memo or tx.category.name,
+                "category": tx.category.name,
+                "color": tx.category.color,
+                "amount": amount,
+                "shared": shared,
+                "percent": pct,
+                "burden": burden,
+            }
+
+        def rp_entry(rp):
+            """未払いの固定費 → 予定項目"""
+            if rp.is_shared:
+                pct = rp.payer_share_percent
+                burden = round_share(rp.amount, pct)
+            else:
+                pct = None
+                burden = rp.amount
+            return {
+                "kind": "planned",
+                "day_of_month": rp.day_of_month,
+                "name": rp.name,
+                "category": rp.category.name,
+                "color": rp.category.color,
+                "amount": rp.amount,
+                "shared": rp.is_shared,
+                "percent": pct,
+                "burden": burden,
+            }
+
+        # 当月に支払記録がある固定費 (自分・相手の共有記録から判定)
+        cond = Q(user=user)
+        if member:
+            cond |= Q(group=member.group)
+        month_txs = list(
+            Transaction.objects.filter(cond, date__range=(first, last))
+            .select_related("category")
+            .prefetch_related("items")
+        )
+        paid_rp_ids = {tx.recurring_payment_id for tx in month_txs if tx.recurring_payment_id}
+
+        # --- 自分 ---
+        my_items = [
+            tx_entry(tx, mine=True)
+            for tx in month_txs
+            if tx.user_id == user.id
+            and tx.parent_id is None
+            and tx.category.type == Category.Type.EXPENSE
+        ]
+        for rp in RecurringPayment.objects.filter(user=user, is_active=True).select_related(
+            "category"
+        ):
+            if rp.is_due_in(first) and rp.id not in paid_rp_ids:
+                my_items.append(rp_entry(rp))
+
+        # --- 相手 (見える範囲: 共有の記録 + 共有の固定費) ---
+        partner_data = None
+        if partner_member:
+            partner = partner_member.user
+            partner_items = [
+                tx_entry(tx, mine=False)
+                for tx in month_txs
+                if tx.user_id == partner.id and tx.group_id is not None
+            ]
+            for rp in RecurringPayment.objects.filter(
+                user=partner, is_active=True, is_shared=True
+            ).select_related("category"):
+                if rp.is_due_in(first) and rp.id not in paid_rp_ids:
+                    partner_items.append(rp_entry(rp))
+            partner_data = {"username": partner.username, "items": partner_items}
+
+        def totals(items):
+            return {
+                "paid_total": sum(i["amount"] for i in items if i["kind"] == "paid"),
+                "planned_total": sum(i["amount"] for i in items if i["kind"] == "planned"),
+                "pay_total": sum(i["amount"] for i in items),
+                "burden_total": sum(i["burden"] for i in items),
+            }
+
+        # 見込み精算: 共有項目 (記録+予定) で「相手が負担してくれる分」の差引
+        def receivable(items):
+            return sum(i["amount"] - i["burden"] for i in items if i["shared"])
+
+        forecast_transfer = None
+        if partner_data:
+            net = receivable(my_items) - receivable(partner_data["items"])
+            if net > 0:
+                forecast_transfer = {
+                    "from": partner_data["username"],
+                    "to": user.username,
+                    "amount": net,
+                }
+            elif net < 0:
+                forecast_transfer = {
+                    "from": user.username,
+                    "to": partner_data["username"],
+                    "amount": -net,
+                }
+
+        response = {
+            "month": month,
+            "me": {"username": user.username, "items": my_items, **totals(my_items)},
+            "partner": (
+                {**partner_data, **totals(partner_data["items"])} if partner_data else None
+            ),
+            "forecast_transfer": forecast_transfer,
+        }
+        return Response(response)
+
+
 class GroupView(APIView):
     """自分のグループの取得・作成・負担割合の変更"""
 

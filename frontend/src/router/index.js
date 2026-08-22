@@ -14,6 +14,7 @@ const router = createRouter({
     { path: '/categories', name: 'categories', component: () => import('../pages/CategoriesPage.vue') },
     { path: '/settings', name: 'settings', component: () => import('../pages/SettingsPage.vue') },
     { path: '/import', name: 'import', component: () => import('../pages/ImportPage.vue') },
+    { path: '/burden', name: 'burden', component: () => import('../pages/BurdenPage.vue') },
   ],
 })
 

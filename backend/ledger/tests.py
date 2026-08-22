@@ -314,6 +314,103 @@ class SharedTransactionTests(BaseTestCase):
         self.assertEqual(res.status_code, 400)
 
 
+class BurdenTests(BaseTestCase):
+    def setUp(self):
+        super().setUp()
+        self.group = Group.objects.create(name="我が家", invite_code="ABCD1234")
+        GroupMember.objects.create(group=self.group, user=self.alice, share_percent=50)
+        GroupMember.objects.create(group=self.group, user=self.bob, share_percent=50)
+        self.bob_food = Category.objects.get(user=self.bob, name="食費")
+
+    def test_burden_view_with_planned_fixed_costs(self):
+        # alice: 自分のみ5000 / 共有10000折半 / 未払い固定費: 家賃70000共有折半 + サブスク1000自分のみ
+        Transaction.objects.create(
+            user=self.alice, category=self.alice_food, amount=5000, date="2026-08-03"
+        )
+        Transaction.objects.create(
+            user=self.alice,
+            category=self.alice_food,
+            amount=10000,
+            date="2026-08-05",
+            group=self.group,
+            payer_share_percent=50,
+        )
+        RecurringPayment.objects.create(
+            user=self.alice,
+            name="家賃",
+            amount=70000,
+            category=self.alice_housing,
+            day_of_month=27,
+            is_shared=True,
+            payer_share_percent=50,
+        )
+        RecurringPayment.objects.create(
+            user=self.alice,
+            name="サブスク",
+            amount=1000,
+            category=self.alice_food,
+            day_of_month=1,
+        )
+        # bob: 共有3000 (bob70%) / bobの共有固定費: 水道4000折半 (未払い)
+        Transaction.objects.create(
+            user=self.bob,
+            category=self.bob_food,
+            amount=3000,
+            date="2026-08-10",
+            group=self.group,
+            payer_share_percent=70,
+        )
+        RecurringPayment.objects.create(
+            user=self.bob,
+            name="水道",
+            amount=4000,
+            category=self.bob_food,
+            day_of_month=26,
+            is_shared=True,
+            payer_share_percent=50,
+        )
+        # bob の共有でない固定費は alice からは見えない
+        RecurringPayment.objects.create(
+            user=self.bob,
+            name="bob個人",
+            amount=9999,
+            category=self.bob_food,
+            day_of_month=5,
+        )
+
+        self.client.force_login(self.alice)
+        data = self.client.get("/api/summary/burden/", {"month": "2026-08"}).json()
+
+        me = data["me"]
+        self.assertEqual(me["paid_total"], 15000)
+        self.assertEqual(me["planned_total"], 71000)
+        self.assertEqual(me["pay_total"], 86000)
+        self.assertEqual(me["burden_total"], 5000 + 5000 + 35000 + 1000)
+
+        partner = data["partner"]
+        names = {i["name"] for i in partner["items"]}
+        self.assertIn("水道", names)
+        self.assertNotIn("bob個人", names)
+        self.assertEqual(partner["pay_total"], 7000)
+        self.assertEqual(partner["burden_total"], 2100 + 2000)
+
+        # 見込み精算: alice受取 (10000-5000)+(70000-35000)=40000 / bob側 900+2000=2900 → 37100
+        self.assertEqual(data["forecast_transfer"]["to"], "alice")
+        self.assertEqual(data["forecast_transfer"]["amount"], 37100)
+
+        # 支払済にした固定費は予定から消える (支払記録側に出る)
+        rent = RecurringPayment.objects.get(name="家賃")
+        self.client.post(
+            f"/api/recurring-payments/{rent.id}/pay/", {"month": "2026-08"}, format="json"
+        )
+        data = self.client.get("/api/summary/burden/", {"month": "2026-08"}).json()
+        planned_names = {
+            i["name"] for i in data["me"]["items"] if i["kind"] == "planned"
+        }
+        self.assertNotIn("家賃", planned_names)
+        self.assertEqual(data["me"]["pay_total"], 86000)  # 合計は変わらない
+
+
 class RecurringIntervalTests(BaseTestCase):
     def test_interval_due_months(self):
         # 固定資産税: 4ヶ月ごと、2026-05 が該当月 → 5月/9月/翌1月が対象

@@ -93,6 +93,10 @@ function dayLabel(dateStr) {
         </p>
       </div>
 
+      <RouterLink to="/burden" class="burden-link">
+        📋 負担詳細を見る (固定費含む見込み) ›
+      </RouterLink>
+
       <div v-if="shared.settlement" class="transfer settled">
         ✓ 精算済み: {{ shared.settlement.from }} → {{ shared.settlement.to }}
         {{ yen(shared.settlement.amount) }}
@@ -246,6 +250,15 @@ function dayLabel(dateStr) {
   font-size: 0.68rem;
   color: var(--color-text-sub);
   margin-top: 8px;
+}
+
+.burden-link {
+  display: block;
+  color: var(--color-primary);
+  font-size: 0.82rem;
+  font-weight: 600;
+  text-decoration: none;
+  padding: 4px 0 10px;
 }
 
 .transfer {

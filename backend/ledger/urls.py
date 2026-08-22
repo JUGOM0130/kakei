@@ -13,6 +13,7 @@ router.register(
 
 urlpatterns = [
     path("summary/monthly/", views.MonthlySummaryView.as_view()),
+    path("summary/burden/", views.BurdenView.as_view()),
     path("balance/", views.BalanceView.as_view()),
     path("preferences/", views.PreferenceView.as_view()),
     path("import/suggest/", views.ImportSuggestView.as_view()),
