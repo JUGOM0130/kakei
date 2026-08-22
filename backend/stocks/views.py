@@ -236,6 +236,30 @@ class ImportDividendsView(APIView):
         )
 
 
+class KnownCodesView(APIView):
+    """過去に取引・配当受取のある銘柄の一覧 (入力フォームの候補用、最近使った順)。"""
+
+    def get(self, request):
+        latest = {}  # code -> (最終利用日, 銘柄名)
+
+        def merge(rows):
+            for code, name, day in rows:
+                cur = latest.get(code)
+                if cur is None or day > cur[0]:
+                    latest[code] = (day, name)
+
+        merge(
+            Trade.objects.filter(user=request.user).values_list("code", "name", "trade_date")
+        )
+        merge(
+            Dividend.objects.filter(user=request.user).values_list(
+                "code", "name", "received_date"
+            )
+        )
+        items = sorted(latest.items(), key=lambda kv: kv[1][0], reverse=True)
+        return Response([{"code": code, "name": name} for code, (_, name) in items])
+
+
 class PositionsView(APIView):
     """保有ポジション一覧 (移動平均法)。現在値が登録されていれば評価損益も返す。"""
 

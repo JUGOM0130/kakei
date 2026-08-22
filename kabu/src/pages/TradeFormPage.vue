@@ -3,6 +3,7 @@ import { onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import api from '../api/client'
 import { useStocksStore } from '../stores/stocks'
+import KnownCodesDatalist from '../components/KnownCodesDatalist.vue'
 import { ACCOUNT_TYPES } from '../utils/format'
 import { lookupStockName, normalizeCode } from '../utils/stockNames'
 
@@ -41,7 +42,7 @@ watch(
     }
     // 手入力済みの銘柄名は上書きしない (自動補完した値だけ差し替え可)
     if (form.value.name && form.value.name !== autoName.value) return
-    const name = (await lookupStockName(c)) || past?.name
+    const name = (await lookupStockName(c)) || past?.name || stocks.knownName(c)
     if (name && (!form.value.name || form.value.name === autoName.value)) {
       form.value.name = name
       autoName.value = name
@@ -105,7 +106,8 @@ onMounted(async () => {
       <div class="two-col">
         <div>
           <label for="code">銘柄コード</label>
-          <input id="code" v-model="form.code" type="text" placeholder="7203" required />
+          <input id="code" v-model="form.code" type="text" placeholder="7203" list="known-codes" required />
+          <KnownCodesDatalist />
         </div>
         <div>
           <label for="name">銘柄名</label>

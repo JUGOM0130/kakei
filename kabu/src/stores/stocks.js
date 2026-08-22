@@ -12,8 +12,18 @@ export const useStocksStore = defineStore('stocks', {
     watches: [],
     refreshing: false,
     priceFailed: [],
+    // 過去に取引・配当のある銘柄 (入力候補用、最近使った順)
+    knownStocks: [],
   }),
+  getters: {
+    knownName: (state) => (code) =>
+      state.knownStocks.find((s) => s.code === code)?.name || null,
+  },
   actions: {
+    async fetchKnownStocks() {
+      const { data } = await api.get('/stocks/codes/')
+      this.knownStocks = data
+    },
     async fetchSummary() {
       const { data } = await api.get('/stocks/summary/', { params: { year: this.year } })
       this.summary = data

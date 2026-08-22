@@ -1,6 +1,7 @@
 <script setup>
 import { onMounted, ref, watch } from 'vue'
 import { useStocksStore } from '../stores/stocks'
+import KnownCodesDatalist from '../components/KnownCodesDatalist.vue'
 import SettlementMonthSelect from '../components/SettlementMonthSelect.vue'
 import { timeLabel } from '../utils/format'
 import { lookupStockName, normalizeCode } from '../utils/stockNames'
@@ -19,7 +20,7 @@ watch(
   () => form.value.code,
   async (code) => {
     if (form.value.name && form.value.name !== autoName.value) return
-    const name = await lookupStockName(code)
+    const name = (await lookupStockName(code)) || stocks.knownName(normalizeCode(code))
     if (name && (!form.value.name || form.value.name === autoName.value)) {
       form.value.name = name
       autoName.value = name
@@ -101,7 +102,8 @@ onMounted(async () => {
       <div class="two-col">
         <div>
           <label for="w-code">銘柄コード</label>
-          <input id="w-code" v-model="form.code" type="text" placeholder="7203" required />
+          <input id="w-code" v-model="form.code" type="text" placeholder="7203" list="known-codes" required />
+          <KnownCodesDatalist />
         </div>
         <div>
           <label for="w-name">銘柄名</label>

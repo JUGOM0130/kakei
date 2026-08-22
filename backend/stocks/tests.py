@@ -238,6 +238,30 @@ class SummaryApiTests(APITestCase):
         self.assertEqual(res.data["skipped_manual"], 1)
         self.assertEqual(Trade.objects.filter(user=self.user).count(), 1)
 
+    def test_known_codes(self):
+        make_trade(self.user, trade_date=date(2026, 1, 10), code="7203", name="トヨタ")
+        make_trade(self.user, trade_date=date(2026, 3, 10), code="9432", name="NTT")
+        # 同一銘柄は最新の名前で1件にまとまり、配当だけの銘柄も候補に入る
+        make_trade(self.user, trade_date=date(2026, 2, 1), code="7203", name="トヨタ自動車")
+        Dividend.objects.create(
+            user=self.user,
+            received_date=date(2026, 6, 1),
+            code="PFE",
+            name="PFIZER INC.",
+            currency="USドル",
+            amount=1,
+        )
+        res = self.client.get("/api/stocks/codes/")
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(
+            res.data,
+            [
+                {"code": "PFE", "name": "PFIZER INC."},
+                {"code": "9432", "name": "NTT"},
+                {"code": "7203", "name": "トヨタ自動車"},
+            ],
+        )
+
     def test_watch_reached(self):
         StockPrice.objects.create(user=self.user, code="7203", price=Decimal("2450"))
         res = self.client.post(
